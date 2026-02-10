@@ -12,6 +12,7 @@ import {
   getReferralsOfPartner,
   getPartnerEarningsHistory,
 } from "@/lib/db";
+import { productPhotoToUrl } from "@/lib/media";
 
 function daysOnService(joinDate: string | null): number | null {
   if (!joinDate) return null;
@@ -46,12 +47,19 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const [subscriptions, recurringSubscriptions, payments, subscriptionPayments] = [
-    getUserSubscriptions(telegramUserId),
-    getUserRecurringSubscriptions(telegramUserId),
-    getUserPaymentsForProfile(telegramUserId),
-    getRecurringPaymentsForProfile(telegramUserId),
-  ];
+  const subscriptionsRaw = getUserSubscriptions(telegramUserId);
+  const recurringRaw = getUserRecurringSubscriptions(telegramUserId);
+  const payments = getUserPaymentsForProfile(telegramUserId);
+  const subscriptionPayments = getRecurringPaymentsForProfile(telegramUserId);
+
+  const subscriptions = subscriptionsRaw.map((s) => ({
+    ...s,
+    product_photo: productPhotoToUrl(s.product_photo ?? null) ?? null,
+  }));
+  const recurringSubscriptions = recurringRaw.map((r) => ({
+    ...r,
+    product_photo: productPhotoToUrl(r.product_photo ?? null) ?? null,
+  }));
 
   const telegramUser = getTelegramUserFromInitData(initData);
   const firstName = telegramUser?.first_name ?? null;

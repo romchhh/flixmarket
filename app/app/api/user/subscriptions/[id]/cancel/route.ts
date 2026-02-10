@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateInitData, getTelegramUserIdFromInitData } from "@/lib/telegram";
-import { getUserByTelegramId, cancelUserSubscription, getSubscriptionByIdAndUser } from "@/lib/db";
+import {
+  getUserByTelegramId,
+  cancelUserSubscription,
+  getSubscriptionByIdAndUser,
+  getRecurringSubscriptionByIdAndUser,
+  cancelRecurringSubscription,
+} from "@/lib/db";
 import { TelegramNotify } from "@/lib/telegram-notify";
 
 export async function POST(
@@ -40,22 +46,33 @@ export async function POST(
     );
   }
 
+  let productName: string | null = null;
+
   const sub = getSubscriptionByIdAndUser(subscriptionId, telegramUserId);
-  const cancelled = cancelUserSubscription(subscriptionId, telegramUserId);
-  if (!cancelled) {
-    return NextResponse.json(
-      { error: "Subscription not found or already cancelled", code: "not_found" },
-      { status: 404 }
-    );
+  const cancelledSimple = cancelUserSubscription(subscriptionId, telegramUserId);
+  if (cancelledSimple && sub) {
+    productName = sub.product_name;
   }
 
-  if (sub) {
-    await TelegramNotify.sendSubscriptionCancelled(
-      telegramUserId,
-      user.user_name ?? null,
-      sub.product_name ?? "—"
-    );
+  if (!cancelledSimple) {
+    const recSub = getRecurringSubscriptionByIdAndUser(subscriptionId, telegramUserId);
+    const cancelledRecurring = cancelRecurringSubscription(subscriptionId, telegramUserId);
+    if (cancelledRecurring && recSub) {
+      productName = recSub.product_name;
+    }
+    if (!cancelledRecurring) {
+      return NextResponse.json(
+        { error: "Subscription not found or already cancelled", code: "not_found" },
+        { status: 404 }
+      );
+    }
   }
+
+  await TelegramNotify.sendSubscriptionCancelled(
+    telegramUserId,
+    user.user_name ?? null,
+    productName ?? "—"
+  );
 
   return NextResponse.json({ success: true });
 }

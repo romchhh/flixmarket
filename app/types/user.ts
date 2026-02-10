@@ -37,6 +37,7 @@ export interface UserPayment {
 export interface RecurringSubscription {
   id: number;
   product_name: string | null;
+  product_photo?: string | null;
   months: number;
   price: number;
   next_payment_date: string | null;

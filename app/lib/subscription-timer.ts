@@ -1,9 +1,17 @@
+/** Витягти дату "YYYY-MM-DD" з рядка (напр. "2025-02-15" або "2025-02-15 00:00:00"). */
+function toDateOnly(dateStr: string): string {
+  const s = dateStr.trim();
+  const part = s.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(part) ? part : s;
+}
+
 /**
  * Розрахунок часу до кінця підписки (до кінця дня end_date).
- * end_date: "YYYY-MM-DD"
+ * end_date: "YYYY-MM-DD" або "YYYY-MM-DD HH:MM:SS"
  */
 export function getSubscriptionEndTime(endDate: string): Date {
-  return new Date(`${endDate.trim()}T23:59:59`);
+  const dateOnly = toDateOnly(endDate);
+  return new Date(`${dateOnly}T23:59:59`);
 }
 
 export function getTimeLeft(endDate: string): {
@@ -13,9 +21,16 @@ export function getTimeLeft(endDate: string): {
   minutes: number;
   seconds: number;
 } {
+  if (!endDate || typeof endDate !== "string" || !endDate.trim()) {
+    return { ended: true, days: 0, hours: 0, minutes: 0, seconds: 0 };
+  }
   const end = getSubscriptionEndTime(endDate);
+  const endTime = end.getTime();
+  if (Number.isNaN(endTime)) {
+    return { ended: true, days: 0, hours: 0, minutes: 0, seconds: 0 };
+  }
   const now = new Date();
-  const diff = end.getTime() - now.getTime();
+  const diff = endTime - now.getTime();
   if (diff <= 0) {
     return { ended: true, days: 0, hours: 0, minutes: 0, seconds: 0 };
   }
@@ -44,7 +59,8 @@ const MONTH_NAMES: Record<number, string> = {
 
 /** Нормалізована дата для відображення: "27 березня 2025" */
 export function formatSubscriptionDate(dateStr: string): string {
-  const d = new Date(dateStr.trim() + "T12:00:00");
+  const dateOnly = toDateOnly(dateStr);
+  const d = new Date(dateOnly + "T12:00:00");
   if (Number.isNaN(d.getTime())) return dateStr;
   const day = d.getDate();
   const month = MONTH_NAMES[d.getMonth() + 1] ?? "";

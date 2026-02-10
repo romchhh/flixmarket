@@ -17,6 +17,10 @@ export interface InitDataParsed {
 
 /** Telegram Web App instance (window.Telegram.WebApp) */
 export interface TelegramWebApp {
+  expand?: () => void;
+  ready?: () => void;
+  disableVerticalSwipes?: () => void;
+  enableClosingConfirmation?: () => void;
   openLink?: (url: string) => void;
   openTelegramLink?: (url: string) => void;
   showAlert?: (message: string) => void;

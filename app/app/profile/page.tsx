@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronDown, ChevronUp, User, CreditCard, Receipt, XCircle, Users, Copy, ExternalLink, Share2 } from "lucide-react";
@@ -19,6 +19,7 @@ function getInitData(): string {
 type ErrorCode = "open_telegram" | "open_in_telegram" | "user_not_found" | null;
 
 const PAYMENTS_INITIAL = 10;
+const TOUCH_DEBOUNCE_MS = 400;
 const MONTH_NAMES: Record<number, string> = {
   1: "Січень", 2: "Лютий", 3: "Березень", 4: "Квітень", 5: "Травень", 6: "Червень",
   7: "Липень", 8: "Серпень", 9: "Вересень", 10: "Жовтень", 11: "Листопад", 12: "Грудень",
@@ -49,7 +50,8 @@ export default function ProfilePage() {
   const [expandedSubId, setExpandedSubId] = useState<number | null>(null);
   const [referralExpanded, setReferralExpanded] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
+  const lastTouchTime = useRef(0);
 
   const botLink = typeof process.env.NEXT_PUBLIC_BOT_LINK === "string" && process.env.NEXT_PUBLIC_BOT_LINK
     ? process.env.NEXT_PUBLIC_BOT_LINK
@@ -214,7 +216,7 @@ export default function ProfilePage() {
   const hasMorePayments = allPayments.length > PAYMENTS_INITIAL && !showAllPayments;
 
   return (
-    <div className="min-h-screen bg-transparent pb-28">
+    <div className="min-h-screen bg-transparent pb-28" style={{ touchAction: "pan-y" }}>
       <div className="sticky top-0 bg-transparent z-10 px-4 py-3 flex items-center justify-between">
         <button
           type="button"
@@ -401,10 +403,19 @@ export default function ProfilePage() {
                     >
                       <button
                         type="button"
-                        onClick={() => setExpandedSubId(isExpanded ? null : s.id)}
-                        className="w-full text-left"
+                        onClick={() => {
+                          if (Date.now() - lastTouchTime.current < TOUCH_DEBOUNCE_MS) return;
+                          setExpandedSubId(isExpanded ? null : s.id);
+                        }}
+                        onPointerUp={(e) => {
+                          if (e.pointerType === "touch") {
+                            lastTouchTime.current = Date.now();
+                            setExpandedSubId((prev) => (prev === s.id ? null : s.id));
+                          }
+                        }}
+                        className="w-full text-left touch-manipulation cursor-pointer select-none"
                       >
-                        <div className="flex gap-4 p-4">
+                        <div className="flex gap-4 p-4 pointer-events-none">
                           <div className="w-20 h-20 rounded-xl bg-gray-100 shrink-0 overflow-hidden flex items-center justify-center">
                             {photoUrl ? (
                               <img src={photoUrl} alt="" className="w-full h-full object-cover" />
@@ -491,15 +502,26 @@ export default function ProfilePage() {
                           )}
                         </>
                       )}
-                      <div className="border-t border-gray-100 px-4 py-3">
+                      <div className="border-t border-gray-100 px-4 py-3 bg-white">
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
+                            e.preventDefault();
+                            if (Date.now() - lastTouchTime.current < TOUCH_DEBOUNCE_MS) return;
                             handleCancelSubscription(s.id);
                           }}
+                          onPointerDown={(e) => {
+                            if (e.pointerType === "touch") {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              if (cancelLoadingId === s.id) return;
+                              lastTouchTime.current = Date.now();
+                              handleCancelSubscription(s.id);
+                            }
+                          }}
                           disabled={cancelLoadingId === s.id}
-                          className="w-full flex items-center justify-center gap-2 py-2.5 text-sm font-medium text-rose-600 hover:bg-rose-50 rounded-xl transition-colors disabled:opacity-50"
+                          className="w-full flex items-center justify-center gap-2 py-3 text-sm font-medium text-rose-600 hover:bg-rose-50 active:bg-rose-100 rounded-xl transition-colors disabled:opacity-50 touch-manipulation cursor-pointer min-h-[44px] bg-white border border-rose-200"
                         >
                           {cancelLoadingId === s.id ? (
                             <span className="animate-pulse">Скасування…</span>
@@ -521,11 +543,16 @@ export default function ProfilePage() {
                 {activeRecurring.map((r) => {
                   const monthsWord = r.months === 1 ? "місяць" : r.months >= 2 && r.months <= 4 ? "місяці" : "місяців";
                   const nextDate = r.next_payment_date ? (r.next_payment_date.includes(" ") ? r.next_payment_date.slice(0, 10) : r.next_payment_date) : null;
+                  const recPhotoUrl = r.product_photo ?? null;
                   return (
                     <div key={r.id} className="rounded-2xl border-2 border-violet-200 bg-white overflow-hidden shadow-sm">
                       <div className="flex gap-4 p-4">
-                        <div className="w-20 h-20 rounded-xl bg-violet-50 shrink-0 flex items-center justify-center">
-                          <span className="text-3xl">🔄</span>
+                        <div className="w-20 h-20 rounded-xl bg-violet-50 shrink-0 overflow-hidden flex items-center justify-center">
+                          {recPhotoUrl ? (
+                            <img src={recPhotoUrl} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="text-3xl">🔄</span>
+                          )}
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="font-semibold text-gray-900 truncate">
@@ -547,6 +574,37 @@ export default function ProfilePage() {
                           </span>
                         </div>
                       </div>
+                      <div className="border-t border-gray-100 px-4 py-3 bg-white">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            if (Date.now() - lastTouchTime.current < TOUCH_DEBOUNCE_MS) return;
+                            handleCancelSubscription(r.id);
+                          }}
+                          onPointerDown={(e) => {
+                            if (e.pointerType === "touch") {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              if (cancelLoadingId === r.id) return;
+                              lastTouchTime.current = Date.now();
+                              handleCancelSubscription(r.id);
+                            }
+                          }}
+                          disabled={cancelLoadingId === r.id}
+                          className="w-full flex items-center justify-center gap-2 py-3 text-sm font-medium text-rose-600 hover:bg-rose-50 active:bg-rose-100 rounded-xl transition-colors disabled:opacity-50 touch-manipulation cursor-pointer min-h-[44px] bg-white border border-rose-200"
+                        >
+                          {cancelLoadingId === r.id ? (
+                            <span className="animate-pulse">Скасування…</span>
+                          ) : (
+                            <>
+                              <XCircle className="w-4 h-4" />
+                              Скасувати підписку
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -556,11 +614,16 @@ export default function ProfilePage() {
               <div className="space-y-3 mb-4">
                 {endedRecurring.map((r) => {
                   const monthsWord = r.months === 1 ? "місяць" : r.months >= 2 && r.months <= 4 ? "місяці" : "місяців";
+                  const recPhotoUrl = r.product_photo ?? null;
                   return (
                     <div key={r.id} className="rounded-2xl border-2 border-gray-100 bg-gray-50 overflow-hidden shadow-sm opacity-90">
                       <div className="flex gap-4 p-4">
-                        <div className="w-20 h-20 rounded-xl bg-gray-100 shrink-0 flex items-center justify-center">
-                          <span className="text-3xl">🔄</span>
+                        <div className="w-20 h-20 rounded-xl bg-gray-100 shrink-0 overflow-hidden flex items-center justify-center">
+                          {recPhotoUrl ? (
+                            <img src={recPhotoUrl} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="text-3xl">🔄</span>
+                          )}
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="font-semibold text-gray-900 truncate">
@@ -595,10 +658,19 @@ export default function ProfilePage() {
                     >
                       <button
                         type="button"
-                        onClick={() => setExpandedSubId(isExpanded ? null : s.id)}
-                        className="w-full text-left"
+                        onClick={() => {
+                          if (Date.now() - lastTouchTime.current < TOUCH_DEBOUNCE_MS) return;
+                          setExpandedSubId(isExpanded ? null : s.id);
+                        }}
+                        onPointerUp={(e) => {
+                          if (e.pointerType === "touch") {
+                            lastTouchTime.current = Date.now();
+                            setExpandedSubId((prev) => (prev === s.id ? null : s.id));
+                          }
+                        }}
+                        className="w-full text-left touch-manipulation cursor-pointer select-none"
                       >
-                        <div className="flex gap-4 p-4">
+                        <div className="flex gap-4 p-4 pointer-events-none">
                           <div className="w-20 h-20 rounded-xl bg-gray-100 shrink-0 overflow-hidden flex items-center justify-center">
                             {photoUrl ? (
                               <img src={photoUrl} alt="" className="w-full h-full object-cover" />
@@ -613,7 +685,7 @@ export default function ProfilePage() {
                             <p className="text-sm text-gray-500 mt-0.5">Діє до {formatSubscriptionDate(s.end_date)}</p>
                             <p className="text-xs text-gray-500 mt-1">{formatTimeLeft(s.end_date)}</p>
                             <span className="inline-block mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-600">
-                              Закінчилась
+                              {s.status === "cancelled" ? "Скасовано" : "Закінчилась"}
                             </span>
                             <p className="mt-2 text-xs text-violet-600">
                               {isExpanded ? "Приховати деталі" : "Деталі підписки"}
@@ -638,7 +710,7 @@ export default function ProfilePage() {
                                 <dt className="text-gray-500">Статус</dt>
                                 <dd>
                                   <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-600">
-                                    Закінчилась
+                                    {s.status === "cancelled" ? "Скасовано" : "Закінчилась"}
                                   </span>
                                 </dd>
                               </div>

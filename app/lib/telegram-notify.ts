@@ -248,8 +248,8 @@ export function getAdminSubscriptionCancelledText(
  */
 export class TelegramNotify {
   /**
-   * Надіслати в групу адміна повідомлення про скасування підписки.
-   * Викликати після cancelUserSubscription у міні-додатку.
+   * Надіслати в групу адміна повідомлення про скасування підписки (з кнопкою «Написати користувачу», як у боті).
+   * Викликати після cancelUserSubscription або cancelRecurringSubscription у міні-додатку.
    */
   static async sendSubscriptionCancelled(
     userId: number,
@@ -257,7 +257,7 @@ export class TelegramNotify {
     productName: string
   ): Promise<boolean> {
     const text = getAdminSubscriptionCancelledText(userId, username, productName, "miniapp");
-    return sendToAdmin(text);
+    return sendToAdminWithKeyboard(text, userId);
   }
 
   /**

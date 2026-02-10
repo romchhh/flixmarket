@@ -111,6 +111,29 @@ export function cancelUserSubscription(subscriptionId: number, telegramUserId: n
   return result.changes > 0;
 }
 
+/** Отримати повторювану підписку за id та user_id (для скасування та повідомлення в групу). */
+export function getRecurringSubscriptionByIdAndUser(
+  recurringId: number,
+  telegramUserId: number
+): { id: number; product_name: string | null } | null {
+  const database = getDb();
+  const row = database
+    .prepare("SELECT id, product_name FROM recurring_subscriptions WHERE id = ? AND user_id = ?")
+    .get(recurringId, telegramUserId) as { id: number; product_name: string | null } | undefined;
+  return row ?? null;
+}
+
+/** Скасувати повторювану підписку (деактивація, як у боті). Повертає true, якщо оновлено. */
+export function cancelRecurringSubscription(recurringId: number, telegramUserId: number): boolean {
+  const database = getDb();
+  const result = database
+    .prepare(
+      "UPDATE recurring_subscriptions SET status = 'inactive', updated_at = datetime('now') WHERE id = ? AND user_id = ?"
+    )
+    .run(recurringId, telegramUserId) as { changes: number };
+  return result.changes > 0;
+}
+
 function ensurePaymentsTempDataTable(database: SqliteDb) {
   try {
     database.prepare(
@@ -446,12 +469,16 @@ export function getRecurringPaymentsForProfile(telegramUserId: number, limit: nu
   }>;
 }
 
-/** Повторювані підписки користувача (як get_user_recurring_subscriptions у боті). */
+/** Повторювані підписки користувача (як get_user_recurring_subscriptions у боті), з product_photo з products. */
 export function getUserRecurringSubscriptions(telegramUserId: number) {
   const database = getDb();
   return database
     .prepare(
-      "SELECT id, product_name, months, price, next_payment_date, status, payment_failures FROM recurring_subscriptions WHERE user_id = ? ORDER BY id DESC"
+      `SELECT r.id, r.product_name, r.months, r.price, r.next_payment_date, r.status, r.payment_failures, p.product_photo
+       FROM recurring_subscriptions r
+       LEFT JOIN products p ON p.id = r.product_id
+       WHERE r.user_id = ?
+       ORDER BY r.id DESC`
     )
     .all(telegramUserId) as Array<{
     id: number;
@@ -461,6 +488,7 @@ export function getUserRecurringSubscriptions(telegramUserId: number) {
     next_payment_date: string | null;
     status: string | null;
     payment_failures: number;
+    product_photo: string | null;
   }>;
 }
 

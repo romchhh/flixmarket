@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, CreditCard, Receipt, XCircle } from "lucide-react";
@@ -8,6 +8,8 @@ import type { UserProfile } from "@/types/user";
 import { stripHtml } from "@/lib/text";
 import { productPhotoToUrl } from "@/lib/media";
 import { formatTimeLeft, formatSubscriptionDate, formatPaymentDate, getTimeLeft } from "@/lib/subscription-timer";
+
+const TOUCH_DEBOUNCE_MS = 400;
 
 function getInitData(): string {
   if (typeof window === "undefined") return "";
@@ -22,7 +24,8 @@ export default function SubscriptionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [cancelLoadingId, setCancelLoadingId] = useState<number | null>(null);
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
+  const lastTouchTime = useRef(0);
 
   const botLink = typeof process.env.NEXT_PUBLIC_BOT_LINK === "string" && process.env.NEXT_PUBLIC_BOT_LINK
     ? process.env.NEXT_PUBLIC_BOT_LINK
@@ -156,7 +159,7 @@ export default function SubscriptionsPage() {
   const subPayments = profile.subscriptionPayments ?? [];
 
   return (
-    <div className="min-h-screen bg-transparent pb-24">
+    <div className="min-h-screen bg-transparent pb-24" style={{ touchAction: "pan-y" }}>
       <div className="sticky top-0 bg-transparent z-10 px-4 py-3 flex items-center justify-between">
         <button
           type="button"
@@ -204,11 +207,17 @@ export default function SubscriptionsPage() {
                   {activeRecurring.map((r) => {
                     const monthsWord = r.months === 1 ? "місяць" : r.months >= 2 && r.months <= 4 ? "місяці" : "місяців";
                     const nextDate = r.next_payment_date ? (r.next_payment_date.includes(" ") ? r.next_payment_date.slice(0, 10) : r.next_payment_date) : null;
+                    const recPhotoUrl = r.product_photo ?? null;
+                    const nextTimeLeft = nextDate ? getTimeLeft(nextDate) : null;
                     return (
                       <div key={`rec-${r.id}`} className="rounded-2xl border-2 border-violet-200 overflow-hidden shadow-sm bg-white">
                         <div className="flex gap-4 p-4">
-                          <div className="w-24 h-24 rounded-xl bg-violet-50 shrink-0 flex items-center justify-center">
-                            <span className="text-4xl">🔄</span>
+                          <div className="w-24 h-24 rounded-xl bg-violet-50 shrink-0 overflow-hidden flex items-center justify-center">
+                            {recPhotoUrl ? (
+                              <img src={recPhotoUrl} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-4xl">🔄</span>
+                            )}
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="font-semibold text-gray-900 leading-tight">
@@ -230,10 +239,41 @@ export default function SubscriptionsPage() {
                             </span>
                           </div>
                         </div>
-                        <div className="border-t border-gray-100 px-4 py-3 bg-gray-50/50">
-                          <p className="text-xs text-gray-500">
-                            Скасувати повторювану підписку можна в Telegram-боті (Мій кабінет → Управління підписками).
-                          </p>
+                        <div className="border-t border-gray-100 px-4 py-3 bg-gray-50/50 space-y-3">
+                          {nextDate && nextTimeLeft && !nextTimeLeft.ended && (
+                            <p key={`rec-timer-${r.id}-${tick}`} className="text-xs font-mono font-semibold text-violet-600">
+                              До наступного платежу: {nextTimeLeft.days} дн. {String(nextTimeLeft.hours).padStart(2, "0")}:{String(nextTimeLeft.minutes).padStart(2, "0")}:{String(nextTimeLeft.seconds).padStart(2, "0")}
+                            </p>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              if (Date.now() - lastTouchTime.current < TOUCH_DEBOUNCE_MS) return;
+                              handleCancelSubscription(r.id);
+                            }}
+                            onPointerDown={(e) => {
+                              if (e.pointerType === "touch") {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                if (cancelLoadingId === r.id) return;
+                                lastTouchTime.current = Date.now();
+                                handleCancelSubscription(r.id);
+                              }
+                            }}
+                            disabled={cancelLoadingId === r.id}
+                            className="w-full flex items-center justify-center gap-2 py-3 text-sm font-medium text-rose-600 hover:bg-rose-50 active:bg-rose-100 rounded-xl transition-colors disabled:opacity-50 touch-manipulation cursor-pointer min-h-[44px] bg-white border border-rose-200"
+                          >
+                            {cancelLoadingId === r.id ? (
+                              <span className="animate-pulse">Скасування…</span>
+                            ) : (
+                              <>
+                                <XCircle className="w-4 h-4" />
+                                Скасувати підписку
+                              </>
+                            )}
+                          </button>
                         </div>
                       </div>
                     );
@@ -257,10 +297,19 @@ export default function SubscriptionsPage() {
                       >
                         <button
                           type="button"
-                          onClick={() => setExpandedId(isExpanded ? null : s.id)}
-                          className="w-full text-left"
+                          onClick={() => {
+                            if (Date.now() - lastTouchTime.current < TOUCH_DEBOUNCE_MS) return;
+                            setExpandedId(isExpanded ? null : s.id);
+                          }}
+                          onPointerUp={(e) => {
+                            if (e.pointerType === "touch") {
+                              lastTouchTime.current = Date.now();
+                              setExpandedId((prev) => (prev === s.id ? null : s.id));
+                            }
+                          }}
+                          className="w-full text-left touch-manipulation cursor-pointer select-none"
                         >
-                          <div className="flex gap-4 p-4">
+                          <div className="flex gap-4 p-4 pointer-events-none">
                             <div className="w-24 h-24 rounded-xl bg-gray-100 shrink-0 overflow-hidden flex items-center justify-center">
                               {photoUrl ? (
                                 <img src={photoUrl} alt="" className="w-full h-full object-cover" />
@@ -277,8 +326,8 @@ export default function SubscriptionsPage() {
                               </p>
                               <p className="text-sm text-gray-500 mt-1">Діє до {formatSubscriptionDate(s.end_date)}</p>
                               {!timeLeft.ended && (
-                                <p className="text-xs font-mono font-semibold text-violet-600 mt-2">
-                                  ⏱ {timeLeft.days} дн. {String(timeLeft.hours).padStart(2, "0")}:{String(timeLeft.minutes).padStart(2, "0")}:{String(timeLeft.seconds).padStart(2, "0")}
+                                <p key={`timer-${s.id}-${tick}`} className="text-xs font-mono font-semibold text-violet-600 mt-2">
+                                  ⏱ Залишилось: {timeLeft.days} дн. {String(timeLeft.hours).padStart(2, "0")}:{String(timeLeft.minutes).padStart(2, "0")}:{String(timeLeft.seconds).padStart(2, "0")}
                                 </p>
                               )}
                               <span className="inline-block mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
@@ -347,15 +396,26 @@ export default function SubscriptionsPage() {
                             )}
                           </>
                         )}
-                        <div className="border-t border-gray-100 px-4 py-3">
+                        <div className="border-t border-gray-100 px-4 py-3 bg-white">
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
+                              e.preventDefault();
+                              if (Date.now() - lastTouchTime.current < TOUCH_DEBOUNCE_MS) return;
                               handleCancelSubscription(s.id);
                             }}
+                            onPointerDown={(e) => {
+                              if (e.pointerType === "touch") {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                if (cancelLoadingId === s.id) return;
+                                lastTouchTime.current = Date.now();
+                                handleCancelSubscription(s.id);
+                              }
+                            }}
                             disabled={cancelLoadingId === s.id}
-                            className="w-full flex items-center justify-center gap-2 py-2.5 text-sm font-medium text-rose-600 hover:bg-rose-50 rounded-xl transition-colors disabled:opacity-50"
+                            className="w-full flex items-center justify-center gap-2 py-3 text-sm font-medium text-rose-600 hover:bg-rose-50 active:bg-rose-100 rounded-xl transition-colors disabled:opacity-50 touch-manipulation cursor-pointer min-h-[44px] bg-white border border-rose-200"
                           >
                             {cancelLoadingId === s.id ? (
                               <span className="animate-pulse">Скасування…</span>
@@ -379,11 +439,16 @@ export default function SubscriptionsPage() {
                 <div className="space-y-4">
                   {endedRecurring.map((r) => {
                     const monthsWord = r.months === 1 ? "місяць" : r.months >= 2 && r.months <= 4 ? "місяці" : "місяців";
+                    const recPhotoUrl = r.product_photo ?? null;
                     return (
                       <div key={`rec-${r.id}`} className="rounded-2xl border-2 border-gray-100 overflow-hidden shadow-sm bg-white opacity-90">
                         <div className="flex gap-4 p-4">
-                          <div className="w-24 h-24 rounded-xl bg-gray-100 shrink-0 flex items-center justify-center">
-                            <span className="text-4xl">🔄</span>
+                          <div className="w-24 h-24 rounded-xl bg-gray-100 shrink-0 overflow-hidden flex items-center justify-center">
+                            {recPhotoUrl ? (
+                              <img src={recPhotoUrl} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-4xl">🔄</span>
+                            )}
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="font-semibold text-gray-900 leading-tight">
@@ -412,10 +477,19 @@ export default function SubscriptionsPage() {
                       <div key={s.id} className="rounded-2xl border-2 border-gray-100 overflow-hidden shadow-sm bg-white opacity-90">
                         <button
                           type="button"
-                          onClick={() => setExpandedId(isExpanded ? null : s.id)}
-                          className="w-full text-left"
+                          onClick={() => {
+                            if (Date.now() - lastTouchTime.current < TOUCH_DEBOUNCE_MS) return;
+                            setExpandedId(isExpanded ? null : s.id);
+                          }}
+                          onPointerUp={(e) => {
+                            if (e.pointerType === "touch") {
+                              lastTouchTime.current = Date.now();
+                              setExpandedId((prev) => (prev === s.id ? null : s.id));
+                            }
+                          }}
+                          className="w-full text-left touch-manipulation cursor-pointer select-none"
                         >
-                          <div className="flex gap-4 p-4">
+                          <div className="flex gap-4 p-4 pointer-events-none">
                             <div className="w-24 h-24 rounded-xl bg-gray-100 shrink-0 overflow-hidden flex items-center justify-center">
                               {photoUrl ? (
                                 <img src={photoUrl} alt="" className="w-full h-full object-cover" />
@@ -429,7 +503,7 @@ export default function SubscriptionsPage() {
                               </p>
                               <p className="text-sm text-gray-500 mt-1">Діє до {formatSubscriptionDate(s.end_date)}</p>
                               <span className="inline-block mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-600">
-                                Закінчилась
+                                {s.status === "cancelled" ? "Скасовано" : "Закінчилась"}
                               </span>
                               <p className="mt-2 text-xs text-violet-600 flex items-center gap-1">
                                 {isExpanded ? "Приховати деталі" : "Деталі підписки"}
@@ -454,7 +528,7 @@ export default function SubscriptionsPage() {
                                   <dt className="text-gray-500">Статус</dt>
                                   <dd>
                                     <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-600">
-                                      Закінчилась
+                                      {s.status === "cancelled" ? "Скасовано" : "Закінчилась"}
                                     </span>
                                   </dd>
                                 </div>
