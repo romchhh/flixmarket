@@ -319,6 +319,19 @@ def get_user_subscription_success_text(
     return text
 
 
+def get_user_subscription_token_not_found_text(product_name: str, months: int, amount: float) -> str:
+    """Текст користувачу: оплата пройшла, але не вдалося зберегти дані картки для автосписання (після кількох спроб)."""
+    m = _months_word(months)
+    return (
+        f"{get_premium_emoji('check')} <b>Оплата пройшла успішно</b>\n\n"
+        f"• Підписка: {product_name}\n"
+        f"• Термін: {months} {m}\n"
+        f"• Сума: {amount} UAH\n\n"
+        f"⚠️ <b>Не вдалося зберегти дані картки</b> для автоматичного продовження (обмеження платформи або затримка даних).\n\n"
+        f"Для продовження підписки зверніться до менеджера."
+    )
+
+
 def get_user_one_time_success_text(product_name: str, months: int, amount: float) -> str:
     """Текст повідомлення користувачу про успішну одноразову оплату."""
     m = _months_word(months)

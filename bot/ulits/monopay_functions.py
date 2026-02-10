@@ -25,6 +25,7 @@ from Content.texts import get_premium_emoji
 from Content.texts import (
     get_partner_referral_purchase_text,
     get_user_subscription_success_text,
+    get_user_subscription_token_not_found_text,
     get_user_one_time_success_text,
     get_user_contact_manager_text,
     get_admin_new_subscription_text,
@@ -343,44 +344,71 @@ async def check_pending_payments():
                         cursor.execute("SELECT wallet_id FROM payments_temp_data WHERE local_payment_id = ?", (payment_id,))
                         temp_data = cursor.fetchone()
                         
-                        if temp_data:
-                            wallet_id = temp_data[0]
+                        wallet_id = temp_data[0] if temp_data else None
+                        if not wallet_id and "walletData" in payment_data and isinstance(payment_data.get("walletData"), dict):
+                            wallet_id = payment_data["walletData"].get("walletId")
+                        if not wallet_id:
+                            wallet_id = f"wallet_{user_id}_{uuid.uuid4().hex[:8]}"
+                            if not temp_data:
+                                logging.warning(f"Тимчасових даних немає для платежу {payment_id}, використовуємо wallet_id: {wallet_id}")
+                        
+                        from database.client_db import save_user_token, create_recurring_subscription
+                        
+                        MAX_TOKEN_ATTEMPTS = 3
+                        DELAY_SEC = 15
+                        current_payment_data = payment_data
+                        card_token = None
+                        masked_card = "**** **** **** 1234"
+                        card_type = "unknown"
+                        
+                        for attempt in range(1, MAX_TOKEN_ATTEMPTS + 1):
+                            if attempt > 1:
+                                logging.info(f"Повторна спроба {attempt}/{MAX_TOKEN_ATTEMPTS} через {DELAY_SEC} с для {invoice_id}")
+                                await asyncio.sleep(DELAY_SEC)
+                                try:
+                                    resp = requests.get(url, headers=headers)
+                                    if resp.status_code == 200:
+                                        current_payment_data = resp.json()
+                                        logging.info(f"Повторний запит статусу: {json.dumps(current_payment_data, indent=2, ensure_ascii=False)[:500]}...")
+                                    else:
+                                        logging.warning(f"Повторний запит повернув {resp.status_code}")
+                                except Exception as e:
+                                    logging.warning(f"Повторний запит статусу платежу {invoice_id}: {e}")
+                                    continue
                             
-                            logging.info(f"Знайдено тимчасові дані: wallet_id={wallet_id} для платежу {payment_id}")
-                            logging.info(f"Повна структура відповіді від Monobank: {json.dumps(payment_data, indent=2, ensure_ascii=False)}")
-                            
-                            from database.client_db import save_user_token, create_recurring_subscription
-                            
-                            card_token = None
-                            masked_card = "**** **** **** 1234"  # Default fallback
-                            card_type = "unknown"
-                            
-                            if "walletData" in payment_data and payment_data["walletData"]:
-                                wallet_data = payment_data["walletData"]
-                                card_token = wallet_data.get("cardToken")
-                                
+                            if "walletData" in current_payment_data and current_payment_data["walletData"]:
+                                wd = current_payment_data["walletData"]
+                                card_token = wd.get("cardToken") if isinstance(wd, dict) else None
                                 if card_token:
-                                    logging.info(f"✅ Токен картки знайдено в walletData: {card_token}")
-                                else:
-                                    logging.warning(f"⚠️ walletData присутнє, але cardToken відсутній: {wallet_data}")
+                                    logging.info(f"✅ Токен картки знайдено в walletData на спробі {attempt}")
+                                    break
+                                logging.warning(f"walletData є, але cardToken відсутній (спроба {attempt})")
                             else:
-                                logging.warning("⚠️ walletData не знайдено в відповіді")
+                                logging.warning(f"walletData не знайдено у відповіді (спроба {attempt})")
                             
-                            # Отримуємо інформацію про картку з paymentInfo
-                            if "paymentInfo" in payment_data:
-                                payment_info = payment_data["paymentInfo"]
-                                masked_card = payment_info.get("maskedPan", "**** **** **** 1234")
-                                card_type = payment_info.get("paymentSystem", "unknown")
+                            if not card_token and wallet_id:
+                                try:
+                                    wallet_cards = payment_manager.get_wallet_cards(wallet_id)
+                                    if wallet_cards and len(wallet_cards) > 0:
+                                        card_token = wallet_cards[-1].get("cardToken") or wallet_cards[-1].get("token")
+                                        if card_token:
+                                            logging.info(f"✅ Токен картки отримано з wallet API на спробі {attempt}")
+                                            break
+                                except Exception as e:
+                                    logging.warning(f"Wallet API на спробі {attempt}: {e}")
+                            
+                            if "paymentInfo" in current_payment_data:
+                                pi = current_payment_data["paymentInfo"]
+                                if isinstance(pi, dict):
+                                    masked_card = pi.get("maskedPan", masked_card)
+                                    card_type = pi.get("paymentSystem", card_type)
                             
                             if not card_token:
-                                logging.error("❌ Токен картки не знайдено! Пропускаємо створення підписки без токена.")
-                                # Не зберігати фейковий токен і не створювати підписку без реального токена
-                                continue
-                            
-                            logging.info(f"💳 Дані картки: token={card_token}, masked={masked_card}, type={card_type}")
-                            
+                                logging.warning(f"Токен не знайдено, спроба {attempt}/{MAX_TOKEN_ATTEMPTS}")
+                        
+                        if card_token:
+                            logging.info(f"💳 Дані картки: token=..., masked={masked_card}, type={card_type}")
                             save_user_token(user_id, wallet_id, card_token, masked_card, card_type)
-                            
                             create_recurring_subscription(
                                 user_id=user_id,
                                 product_id=product_id,
@@ -389,7 +417,6 @@ async def check_pending_payments():
                                 price=amount,
                                 wallet_id=wallet_id
                             )
-                            
                             card_info = f"{get_premium_emoji('card')} <b>Картка:</b> {masked_card}"
                             if card_type != "unknown":
                                 card_info += f" ({card_type.upper()})"
@@ -399,11 +426,8 @@ async def check_pending_payments():
                                 parse_mode="HTML",
                                 reply_markup=get_channel_keyboard()
                             )
-                            
-                            # Видаляємо тимчасові дані
                             cursor.execute("DELETE FROM payments_temp_data WHERE local_payment_id = ?", (payment_id,))
                             conn.commit()
-                            
                             sub_username = get_username_by_id(user_id)
                             sub_ref_username = get_username_by_id(ref_id) if ref_id else None
                             sub_credit = round(amount * (get_partner_referral_percent() / 100), 1) if ref_id else 0
@@ -424,168 +448,16 @@ async def check_pending_payments():
                                     get_admin_new_subscription_text(payment_id, user_id, sub_username, product_name, amount, months, ref_id, sub_ref_username, sub_credit),
                                     parse_mode="HTML"
                                 )
+                        else:
+                            logging.error("❌ Токен картки не знайдено після всіх спроб. Повідомляємо користувача.")
+                            try:
                                 await bot.send_message(
                                     user_id,
-                                    get_user_contact_manager_text(payment_id),
-                                    parse_mode="HTML",
-                                    reply_markup=get_manager_keyboard()
-                                )
-                                
-                                
-                        else:
-                            logging.error(f"Не знайдено тимчасових даних для підписки {payment_id}")
-                            # Спробуємо отримати wallet_id з оригінального payment_id
-                            wallet_id = f"wallet_{user_id}_{uuid.uuid4().hex[:8]}"
-                            logging.info(f"Створено новий wallet_id: {wallet_id}")
-                            
-                            # Логуємо структуру відповіді навіть якщо немає тимчасових даних  
-                            logging.info(f"Повна структура відповіді від Monobank (без temp_data): {json.dumps(payment_data, indent=2, ensure_ascii=False)}")
-                            
-                            # Імпортуємо функції для роботи з підписками
-                            from database.client_db import save_user_token, create_recurring_subscription
-                            
-                            # Отримуємо дані картки з відповіді Monobank
-                            # Токен може бути в різних полях відповіді
-                            card_token = None
-                            
-                            # Перевіряємо можливі поля для токена
-                            possible_token_fields = [
-                                "cardToken",
-                                "token", 
-                                "cardData",
-                                "saveCardData",
-                                "walletData"
-                            ]
-                            
-                            for field in possible_token_fields:
-                                if field in payment_data:
-                                    card_token = payment_data[field]
-                                    logging.info(f"Знайдено токен в полі '{field}': {card_token}")
-                                    break
-                            
-                            # Перевіряємо у вкладених об'єктах
-                            if not card_token:
-                                if "paymentInfo" in payment_data:
-                                    payment_info = payment_data["paymentInfo"]
-                                    for field in possible_token_fields:
-                                        if field in payment_info:
-                                            card_token = payment_info[field]
-                                            logging.info(f"Знайдено токен в paymentInfo.{field}: {card_token}")
-                                            break
-                            
-                            # Перевіряємо saveCardData об'єкт
-                            if not card_token and "saveCardData" in payment_data:
-                                save_card_data = payment_data["saveCardData"]
-                                if isinstance(save_card_data, dict):
-                                    for field in ["token", "cardToken", "walletId"]:
-                                        if field in save_card_data:
-                                            card_token = save_card_data[field]
-                                            logging.info(f"Знайдено токен в saveCardData.{field}: {card_token}")
-                                            break
-                            
-                            # Якщо токен не знайдено, логуємо повну структуру відповіді і не створюємо підписку
-                            if not card_token:
-                                logging.error("❌ Токен картки не знайдено ані у відповіді, ані у вкладених полях. Пропускаємо створення підписки без токена.")
-                                return
-                            
-                            # Токен картки зберігається в wallet, а не повертається в статусі платежу
-                            # Використовуємо walletId для отримання токену через API
-                            card_token = None
-                            
-                            # Спробуємо отримати токен з wallet API
-                            try:
-                                wallet_cards = payment_manager.get_wallet_cards(wallet_id)
-                                if wallet_cards and len(wallet_cards) > 0:
-                                    # Берємо останню збережену картку
-                                    latest_card = wallet_cards[-1]
-                                    card_token = latest_card.get('cardToken') or latest_card.get('token')
-                                    
-                                    if card_token:
-                                        logging.info(f"Токен картки отримано з wallet API: {card_token[:20]}...")
-                                    else:
-                                        logging.warning(f"Картка знайдена в wallet, але токен відсутній: {latest_card}")
-                                else:
-                                    logging.warning(f"Картки не знайдено в wallet {wallet_id}")
-                                    
-                            except Exception as e:
-                                logging.error(f"Помилка отримання карток з wallet: {e}")
-                            
-                            # Якщо токен все ще не знайдено — не створюємо підписку
-                            if not card_token:
-                                logging.error("❌ Токен картки не знайдено у wallet API. Пропускаємо створення підписки без токена.")
-                                return
-                            
-                            # Отримуємо маскований номер картки
-                            masked_card = "**** **** **** 1234"  # Default fallback
-                            if "paymentInfo" in payment_data and "maskedPan" in payment_data["paymentInfo"]:
-                                masked_card = payment_data["paymentInfo"]["maskedPan"]
-                            elif "maskedPan" in payment_data:
-                                masked_card = payment_data["maskedPan"]
-                            
-                            # Отримуємо тип картки
-                            card_type = "unknown"
-                            if "paymentInfo" in payment_data and "paymentSystem" in payment_data["paymentInfo"]:
-                                card_type = payment_data["paymentInfo"]["paymentSystem"]
-                            elif "cardType" in payment_data:
-                                card_type = payment_data["cardType"]
-                            elif "payMethod" in payment_data:
-                                card_type = payment_data["payMethod"]
-                            
-                            logging.info(f"Дані картки (без temp_data): token={card_token}, masked={masked_card}, type={card_type}")
-                            
-                            # Зберігаємо токен картки
-                            save_user_token(user_id, wallet_id, card_token, masked_card, card_type)
-                            
-                            # Створюємо повторювану підписку
-                            create_recurring_subscription(
-                                user_id=user_id,
-                                product_id=product_id,
-                                product_name=product_name,
-                                months=months,
-                                price=amount,
-                                wallet_id=wallet_id
-                            )
-                            
-                            # Формуємо повідомлення про картку
-                            card_info = f"{get_premium_emoji('card')} <b>Картка:</b> {masked_card}"
-                            if card_type != "unknown":
-                                card_info += f" ({card_type.upper()})"
-                            
-                            await bot.send_message(
-                                user_id,
-                                get_user_subscription_success_text(product_name, months, amount, card_info=card_info),
-                                parse_mode="HTML",
-                                reply_markup=get_channel_keyboard()
-                            )
-                            cursor.execute("DELETE FROM payments_temp_data WHERE local_payment_id = ?", (payment_id,))
-                            conn.commit()
-                            sub_ref_id = get_ref_id_by_user(user_id)
-                            sub_username = get_username_by_id(user_id)
-                            sub_ref_username = get_username_by_id(sub_ref_id) if sub_ref_id else None
-                            sub_credit = round(amount * (get_partner_referral_percent() / 100), 1) if sub_ref_id else 0
-                            try:
-                                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                                    [InlineKeyboardButton(text="👤 Написати користувачу", url=f"tg://user?id={user_id}")],
-                                ])
-                                await bot.send_message(
-                                    admin_chat_id,
-                                    get_admin_new_subscription_text(payment_id, user_id, sub_username, product_name, amount, months, sub_ref_id, sub_ref_username, sub_credit),
-                                    parse_mode="HTML",
-                                    reply_markup=keyboard
-                                )
-                            except Exception as e:
-                                logging.error(f"Помилка при відправці повідомлення адміну про підписку: {e}")
-                                await bot.send_message(
-                                    admin_chat_id,
-                                    get_admin_new_subscription_text(payment_id, user_id, sub_username, product_name, amount, months, sub_ref_id, sub_ref_username, sub_credit),
+                                    get_user_subscription_token_not_found_text(product_name, months, amount),
                                     parse_mode="HTML"
                                 )
-                                await bot.send_message(
-                                    user_id,
-                                    get_user_contact_manager_text(payment_id),
-                                    parse_mode="HTML",
-                                    reply_markup=get_manager_keyboard()
-                                )
+                            except Exception as e:
+                                logging.error(f"Не вдалося відправити повідомлення користувачу: {e}")
                     
                     else:
                         # Звичайна одноразова оплата

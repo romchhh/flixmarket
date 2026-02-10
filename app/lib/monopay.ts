@@ -14,13 +14,6 @@ function getRedirectUrl(): string {
   return "https://t.me/FlixMarketBot";
 }
 
-/** Базова URL сайту для webhook Monobank (без trailing slash). Якщо задано SITE_URL — webhook увімкнено. */
-function getWebhookBaseUrl(): string | null {
-  const url = process.env.SITE_URL?.trim();
-  if (!url) return null;
-  return url.replace(/\/$/, "");
-}
-
 export type CreatePaymentResult = { localPaymentId: string; invoiceId: string; pageUrl: string };
 export type CreatePaymentWithTokenizationResult = {
   localPaymentId: string;
@@ -41,7 +34,6 @@ export async function createPayment(
 ): Promise<CreatePaymentResult> {
   if (!XTOKEN) throw new Error("XTOKEN is not configured");
   const localPaymentId = `order_${userId}_${Math.floor(Date.now() / 1000)}`;
-  const baseUrl = getWebhookBaseUrl();
   const payload: Record<string, unknown> = {
     amount: Math.round(price * 100),
     ccy: 980,
@@ -61,7 +53,7 @@ export async function createPayment(
       ],
     },
   };
-  if (baseUrl) payload.webHookUrl = `${baseUrl}/api/mono/webhook`;
+  // Webhook не реєструємо — обробка оплат тільки в боті (check_pending_payments)
   const res = await fetch(`${MONO_HOST}api/merchant/invoice/create`, {
     method: "POST",
     headers: { "X-Token": XTOKEN, "Content-Type": "application/json" },
@@ -120,9 +112,7 @@ export async function createPaymentWithTokenization(
       ],
     },
     redirectUrl: getRedirectUrl(),
-    webHookUrl: getWebhookBaseUrl()
-      ? `${getWebhookBaseUrl()}/api/mono/webhook`
-      : undefined,
+    // webHookUrl не вказуємо — обробка тільки в боті
     validity: 3600,
     paymentType: "debit",
     saveCardData: {
