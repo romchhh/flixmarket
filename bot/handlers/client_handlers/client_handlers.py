@@ -26,7 +26,7 @@ payment_manager = PaymentManager()
 async def scheduler_jobs():
     scheduler.add_job(check_pending_payments, "interval", minutes=0.5)
     scheduler.add_job(check_expiring_subscriptions, "cron", hour=16, minute=0)
-    scheduler.add_job(process_recurring_payments, "interval", hours=2)
+    scheduler.add_job(process_recurring_payments, "interval", hours=6)
 
 
 
