@@ -7,9 +7,10 @@ const CATEGORIES_DIR = path.join(PROJECT_ROOT, "bot", "Content", "categories");
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { path: string[] } }
+  context: { params: Promise<{ path: string[] }> }
 ) {
-  const pathSegments = params.path ?? [];
+  const { path: pathParam } = await context.params;
+  const pathSegments = pathParam ?? [];
   const filename = pathSegments[pathSegments.length - 1];
   if (!filename || filename.includes("..")) {
     return NextResponse.json({ error: "Bad request" }, { status: 400 });

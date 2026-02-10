@@ -4,9 +4,10 @@ import { productPhotoToUrl } from "@/lib/media";
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
-  const id = parseInt(params.id, 10);
+  const { id: idParam } = await context.params;
+  const id = parseInt(idParam, 10);
   if (Number.isNaN(id)) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }

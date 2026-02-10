@@ -5,9 +5,10 @@ import { productPhotoToUrl } from "@/lib/media";
 /** Публічний API: один товар за id (без авторизації) */
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
-  const id = parseInt(params.id, 10);
+  const { id: idParam } = await context.params;
+  const id = parseInt(idParam, 10);
   if (!Number.isInteger(id) || id < 1) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }

@@ -12,11 +12,12 @@ async function requireAdmin() {
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   const err = await requireAdmin();
   if (err) return err;
-  const id = parseInt(params.id, 10);
+  const { id: idParam } = await context.params;
+  const id = parseInt(idParam, 10);
   if (!Number.isInteger(id)) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }
@@ -32,11 +33,12 @@ export async function GET(
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   const err = await requireAdmin();
   if (err) return err;
-  const id = parseInt(params.id, 10);
+  const { id: idParam } = await context.params;
+  const id = parseInt(idParam, 10);
   if (!Number.isInteger(id)) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }
@@ -81,11 +83,12 @@ export async function PUT(
 
 export async function DELETE(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   const err = await requireAdmin();
   if (err) return err;
-  const id = parseInt(params.id, 10);
+  const { id: idParam } = await context.params;
+  const id = parseInt(idParam, 10);
   if (!Number.isInteger(id)) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }

@@ -5,12 +5,13 @@ import { categoryPhotoToUrl } from "@/lib/media";
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   const ok = await getAdminSession();
   if (!ok) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const catalogId = parseInt(params.id, 10);
+  const { id } = await context.params;
+  const catalogId = parseInt(id, 10);
   if (!Number.isInteger(catalogId)) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }
