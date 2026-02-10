@@ -7,11 +7,15 @@ import { useAdminToast } from "@/components/contexts/AdminToastContext";
 import { ImageDropzone } from "@/components/admin/ImageDropzone";
 import { isSubscriptionTariffsString } from "@/lib/text";
 
+type Category = { catalog_id: number; product_type: string };
+
 export default function EditProductPage() {
   const params = useParams();
   const router = useRouter();
   const toast = useAdminToast();
   const id = Number(params.id);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [catalogId, setCatalogId] = useState<string>("");
   const [productName, setProductName] = useState("");
   const [productDescription, setProductDescription] = useState("");
   const [productPrice, setProductPrice] = useState("");
@@ -23,6 +27,13 @@ export default function EditProductPage() {
   const [loading, setLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch("/api/admin/categories")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((arr) => setCategories(Array.isArray(arr) ? arr : []))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!Number.isInteger(id)) {
@@ -42,6 +53,7 @@ export default function EditProductPage() {
         setProductPhotoUrl(data.product_photo || null);
         setPaymentType(data.payment_type === "one_time" ? "one_time" : "subscription");
         setProductBadge(data.product_badge || "");
+        setCatalogId(String(data.catalog_id ?? ""));
       })
       .catch(() => setError("Товар не знайдено"))
       .finally(() => setFetchLoading(false));
@@ -76,17 +88,22 @@ export default function EditProductPage() {
       ? trimmedPrice
       : parseFloat(productPrice.replace(",", "."));
     try {
+      const payload: Record<string, unknown> = {
+        product_name: productName.trim(),
+        product_description: productDescription.trim() || null,
+        product_price: pricePayload,
+        ...(productPhoto !== null && { product_photo: productPhoto }),
+        payment_type: paymentType,
+        product_badge: productBadge || null,
+      };
+      const catId = catalogId.trim() ? parseInt(catalogId, 10) : undefined;
+      if (Number.isInteger(catId) && catId && categories.some((c) => c.catalog_id === catId)) {
+        payload.catalog_id = catId;
+      }
       const res = await fetch(`/api/admin/products/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          product_name: productName.trim(),
-          product_description: productDescription.trim() || null,
-          product_price: pricePayload,
-          ...(productPhoto !== null && { product_photo: productPhoto }),
-          payment_type: paymentType,
-          product_badge: productBadge || null,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -138,6 +155,21 @@ export default function EditProductPage() {
       </div>
       <h1 className="text-2xl font-bold text-gray-900">Редагувати товар</h1>
       <form onSubmit={handleSubmit} className="max-w-xl space-y-4">
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Категорія</label>
+          <select
+            value={catalogId}
+            onChange={(e) => setCatalogId(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20"
+          >
+            <option value="">Оберіть категорію</option>
+            {categories.map((c) => (
+              <option key={c.catalog_id} value={c.catalog_id}>
+                {c.product_type}
+              </option>
+            ))}
+          </select>
+        </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">Назва товару *</label>
           <input

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminSession } from "@/lib/admin-auth";
-import { getProductById, updateProduct, deleteProduct } from "@/lib/db";
+import { getProductById, updateProduct, deleteProduct, getProductTypes } from "@/lib/db";
 import { productPhotoToUrl } from "@/lib/media";
 import { isSubscriptionTariffsString } from "@/lib/text";
 
@@ -51,6 +51,8 @@ export async function PUT(
       product_photo?: string | null;
       payment_type?: string;
       product_badge?: string | null;
+      catalog_id?: number;
+      product_type?: string;
     } = {};
     if (typeof body.product_name === "string") data.product_name = body.product_name.trim();
     if (body.product_description !== undefined) data.product_description = body.product_description === "" ? null : body.product_description;
@@ -70,6 +72,16 @@ export async function PUT(
     if (body.product_photo !== undefined) data.product_photo = body.product_photo;
     if (typeof body.payment_type === "string") data.payment_type = body.payment_type;
     if (body.product_badge !== undefined) data.product_badge = body.product_badge === "" ? null : body.product_badge;
+
+    const catalogId = body.catalog_id !== undefined ? Number(body.catalog_id) : undefined;
+    if (catalogId !== undefined && Number.isInteger(catalogId) && catalogId >= 1) {
+      const types = getProductTypes();
+      const cat = types.find((t) => t.catalog_id === catalogId);
+      if (cat) {
+        data.catalog_id = catalogId;
+        data.product_type = cat.product_type;
+      }
+    }
 
     const success = updateProduct(id, data);
     if (!success) {

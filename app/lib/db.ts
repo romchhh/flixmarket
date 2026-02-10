@@ -723,7 +723,7 @@ export function createProduct(
   }
 }
 
-/** Оновити товар (product_price: число або рядок тарифів для підписки) */
+/** Оновити товар (product_price: число або рядок тарифів для підписки). catalog_id + product_type — зміна категорії товару. */
 export function updateProduct(
   productId: number,
   data: {
@@ -733,6 +733,8 @@ export function updateProduct(
     product_photo?: string | null;
     payment_type?: string;
     product_badge?: string | null;
+    catalog_id?: number;
+    product_type?: string;
   }
 ): boolean {
   const database = getDb();
@@ -762,6 +764,14 @@ export function updateProduct(
     if (data.product_badge !== undefined) {
       updates.push("product_badge = ?");
       values.push(data.product_badge || null);
+    }
+    if (data.catalog_id !== undefined) {
+      updates.push("catalog_id = ?");
+      values.push(data.catalog_id);
+    }
+    if (data.product_type !== undefined) {
+      updates.push("product_type = ?");
+      values.push(data.product_type);
     }
     if (updates.length === 0) return true;
     values.push(productId);
