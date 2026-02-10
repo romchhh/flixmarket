@@ -1,0 +1,19 @@
+# Спільний .env (токени, секрети)
+.env
+
+# Python
+bot/__pycache__/
+bot/**/__pycache__/
+*.pyc
+bot/myenv/
+bot/.venv/
+
+# App
+app/node_modules/
+app/.next/
+app/out/
+app/.env.local
+
+# Локальна БД (не комітити)
+database/*.db
+database/*.db-journal
