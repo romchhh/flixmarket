@@ -328,11 +328,11 @@ export default function ProductPage() {
             </h1>
             {isSubscription ? (
               <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-violet-100 to-fuchsia-100 px-3.5 py-2 text-xs font-semibold text-violet-700 shadow-sm border border-violet-200/60">
-                <span>{periodSummary ? `Оплата щомісячно · ${periodSummary}` : "Оплата щомісячно · Підписка"}</span>
+                <span>{periodSummary ?? "Підписка"}</span>
               </div>
             ) : (
               <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-gray-100 px-3.5 py-2 text-xs font-semibold text-gray-700 shadow-sm border border-gray-200/60">
-                <span>Одноразова оплата</span>
+                <span>Разова оплата</span>
               </div>
             )}
             {product.product_description && (() => {
@@ -460,9 +460,13 @@ export default function ProductPage() {
                       </h3>
                       <p className="text-xs text-gray-500 mt-0.5">{stripHtml(p.product_type)}</p>
                       <div className="text-sm font-bold text-gray-900 mt-1">{formatPriceDisplay(p.product_price)}</div>
-                      {isSub && (
+                      {isSub ? (
                         <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-600">
-                          {period ?? "Щомісячно"}
+                          {period ?? "Підписка"}
+                        </div>
+                      ) : (
+                        <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">
+                          Разова оплата
                         </div>
                       )}
                     </div>

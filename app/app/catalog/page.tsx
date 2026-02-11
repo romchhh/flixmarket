@@ -170,11 +170,11 @@ export default function CatalogPage() {
                             </div>
                             {isSub ? (
                               <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-600">
-                                {period ?? "Щомісячно"}
+                                {period ?? "Підписка"}
                               </div>
                             ) : (
                               <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">
-                                Одноразова оплата
+                                Разова оплата
                               </div>
                             )}
                           </div>

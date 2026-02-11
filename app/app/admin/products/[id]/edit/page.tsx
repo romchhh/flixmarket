@@ -51,7 +51,7 @@ export default function EditProductPage() {
         setProductPrice(String(data.product_price ?? ""));
         setProductPhoto(null);
         setProductPhotoUrl(data.product_photo || null);
-        setPaymentType(data.payment_type === "one_time" ? "one_time" : "subscription");
+        setPaymentType(data.payment_type === "one_time" || data.payment_type === "one" ? "one_time" : "subscription");
         setProductBadge(data.product_badge || "");
         setCatalogId(String(data.catalog_id ?? ""));
       })

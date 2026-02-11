@@ -128,12 +128,12 @@ export default function CatalogCategoryPage() {
                   const period = getSubscriptionPeriodSummary(priceStr);
                   return (
                     <div className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-violet-100 to-fuchsia-100 px-2.5 py-1 text-xs font-medium text-violet-700 shadow-sm border border-violet-200/60">
-                      <span>{period ? `Оплата щомісячно · ${period}` : "Оплата щомісячно"}</span>
+                      <span>{period ?? "Підписка"}</span>
                     </div>
                   );
                 })() : (
                   <div className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 shadow-sm border border-gray-200/60">
-                    <span>Одноразова оплата</span>
+                    <span>Разова оплата</span>
                   </div>
                 )}
               </div>

@@ -9,7 +9,7 @@ export function stripHtml(str: string | null | undefined): string {
 
 /**
  * Форматує ціну для відображення.
- * Число → "150 ₴". Рядок тарифів "1 - 150, 3 - 400" → "від 150 ₴". Інший рядок → як є + ₴.
+ * Число → "150 ₴". Рядок тарифів "1 - 150, 3 - 400" → мінімальна ціна "150 ₴". Інший рядок → як є + ₴.
  */
 export function formatPriceDisplay(
   value: number | string | null | undefined
@@ -98,12 +98,12 @@ export function getSubscriptionTariffEntries(priceStr: string | null | undefined
 }
 
 /**
- * Для картки товару: якщо це тарифи підписки — повертає "від X ₴" (мінімальна ціна), інакше null.
+ * Для картки товару: якщо це тарифи підписки — повертає мінімальну ціну "X ₴", інакше null.
  */
 export function getSubscriptionCardPriceLabel(priceStr: string | null | undefined): string | null {
   const entries = getSubscriptionTariffEntries(priceStr);
   if (entries.length === 0) return null;
   const minPrice = Math.min(...entries.map((e) => parseFloat(e.price) || 0));
   if (Number.isNaN(minPrice)) return null;
-  return `від ${new Intl.NumberFormat("uk-UA", { style: "decimal" }).format(minPrice)} ₴`;
+  return `${new Intl.NumberFormat("uk-UA", { style: "decimal" }).format(minPrice)} ₴`;
 }
