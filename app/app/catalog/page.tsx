@@ -126,9 +126,10 @@ export default function CatalogPage() {
                   >
                     {categoryProducts.map((p) => {
                       const priceStr = typeof p.product_price === "string" ? p.product_price : String(p.product_price);
-                      const isSub =
+                      const showPeriod =
                         p.payment_type === "subscription" ||
-                        p.payment_type === "recurring";
+                        p.payment_type === "recurring" ||
+                        isSubscriptionTariffsString(priceStr);
                       const period = getSubscriptionPeriodSummary(priceStr);
                       return (
                         <Link
@@ -168,7 +169,7 @@ export default function CatalogPage() {
                             <div className="text-sm font-bold text-gray-900 mt-1">
                               {formatPriceDisplay(p.product_price)}
                             </div>
-                            {isSub ? (
+                            {showPeriod ? (
                               <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-600">
                                 {period ?? "Підписка"}
                               </div>

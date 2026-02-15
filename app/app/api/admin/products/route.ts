@@ -41,24 +41,30 @@ export async function POST(request: NextRequest) {
     }
 
     let productPrice: number | string;
-    if (paymentType === "subscription" && typeof body.product_price === "string") {
-      const trimmed = body.product_price.trim();
-      if (!trimmed || !isSubscriptionTariffsString(trimmed)) {
+    const rawPrice = body.product_price;
+    const trimmedStr = typeof rawPrice === "string" ? rawPrice.trim() : "";
+
+    if (paymentType === "subscription") {
+      if (!trimmedStr || !isSubscriptionTariffsString(trimmedStr)) {
         return NextResponse.json(
           { error: "Для підписки вкажіть тарифи у форматі: 1 - 150, 3 - 400, 12 - 1100" },
           { status: 400 }
         );
       }
-      productPrice = trimmed;
+      productPrice = trimmedStr;
     } else {
-      const num = Number(body.product_price);
-      if (Number.isNaN(num) || num < 0) {
-        return NextResponse.json(
-          { error: "catalog_id, product_type, product_name, product_price required" },
-          { status: 400 }
-        );
+      if (trimmedStr && isSubscriptionTariffsString(trimmedStr)) {
+        productPrice = trimmedStr;
+      } else {
+        const num = Number(trimmedStr ? trimmedStr.replace(",", ".") : rawPrice);
+        if (Number.isNaN(num) || num < 0) {
+          return NextResponse.json(
+            { error: "Вкажіть ціну (число) або тарифи: 12 - 300 або 6 - 899, 12 - 1550" },
+            { status: 400 }
+          );
+        }
+        productPrice = num;
       }
-      productPrice = num;
     }
 
     const success = createProduct(

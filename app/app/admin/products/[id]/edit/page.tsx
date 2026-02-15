@@ -76,17 +76,26 @@ export default function EditProductPage() {
         return;
       }
     } else {
-      const price = parseFloat(trimmedPrice.replace(",", "."));
-      if (Number.isNaN(price) || price < 0) {
-        setError("Введіть коректну ціну (число)");
+      if (!trimmedPrice) {
+        setError("Введіть ціну або тарифи");
         return;
+      }
+      const asTariffs = isSubscriptionTariffsString(trimmedPrice);
+      if (!asTariffs) {
+        const price = parseFloat(trimmedPrice.replace(",", "."));
+        if (Number.isNaN(price) || price < 0) {
+          setError('Введіть число (наприклад 300) або тарифи "12 - 300" / "6 - 899, 12 - 1550"');
+          return;
+        }
       }
     }
     setLoading(true);
     setError("");
     const pricePayload = paymentType === "subscription"
       ? trimmedPrice
-      : parseFloat(productPrice.replace(",", "."));
+      : isSubscriptionTariffsString(trimmedPrice)
+        ? trimmedPrice
+        : parseFloat(productPrice.replace(",", "."));
     try {
       const payload: Record<string, unknown> = {
         product_name: productName.trim(),
@@ -202,7 +211,7 @@ export default function EditProductPage() {
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">
-            {paymentType === "subscription" ? "Тарифи (місяці - ціна, як у боті) *" : "Ціна (₴) *"}
+            {paymentType === "subscription" ? "Тарифи (місяці - ціна, як у боті) *" : "Ціна (₴) або тарифи як у підписки *"}
           </label>
           <input
             type="text"
@@ -210,11 +219,15 @@ export default function EditProductPage() {
             onChange={(e) => setProductPrice(e.target.value)}
             required
             className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20"
-            placeholder={paymentType === "subscription" ? "1 - 150, 3 - 400, 12 - 1100" : "0"}
+            placeholder={paymentType === "subscription" ? "1 - 150, 3 - 400, 12 - 1100" : "300 або 12 - 300 або 6 - 899, 12 - 1550"}
           />
-          {paymentType === "subscription" && (
+          {paymentType === "subscription" ? (
             <p className="mt-1 text-xs text-gray-500">
               Перше число — кількість місяців, друге — ціна в гривнях. Кілька тарифів через кому.
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-gray-500">
+              Одна ціна (наприклад 300) або тарифи: 12 - 300 або 6 - 899, 12 - 1550 — так само як у підписки.
             </p>
           )}
         </div>

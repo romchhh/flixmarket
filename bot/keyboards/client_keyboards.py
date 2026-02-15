@@ -56,31 +56,34 @@ def get_catalog_keyboard():
 
 
 def get_products_keyboard(catalog_id: int):
+    from ulits.admin_functions import format_product_button_label
+
     keyboard = []
     products = get_products_by_catalog(catalog_id)
     row = []
-    
+
     for product_id, product_name, price in products:
+        label = format_product_button_label(product_name, price)
         row.append(
             InlineKeyboardButton(
-                text=strip_html_for_button(product_name) or product_name,
+                text=label,
                 callback_data=f"product_{product_id}"
             )
         )
         if len(row) == 2:
             keyboard.append(row)
             row = []
-            
+
     if row:
         keyboard.append(row)
-        
+
     keyboard.append([
         InlineKeyboardButton(
             text="← Назад",
             callback_data="back_to_categories"
         )
     ])
-    
+
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 

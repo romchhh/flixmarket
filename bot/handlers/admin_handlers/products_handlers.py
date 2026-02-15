@@ -27,7 +27,7 @@ from database.client_db import get_product_by_id
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from Content.texts import get_calendar_emoji_html, get_premium_emoji
 from ulits.admin_states import AddProduct, EditProduct
-from ulits.admin_functions import format_message_text
+from ulits.admin_functions import format_message_text, format_product_price_tariffs, is_tariff_price
 from aiogram.types import CallbackQuery
 import os
 from datetime import datetime
@@ -71,21 +71,7 @@ async def show_product_info(callback: types.CallbackQuery):
         f"{get_calendar_emoji_html()} Модель підписки" if payment_type == "subscription" else f"{get_premium_emoji('card')} Одноразова оплата"
     )
 
-    tariffs = [t.strip() for t in price.split(",")] if "," in price else [price]
-    formatted_tariffs = []
-
-    for tariff in tariffs:
-        months, price_value = tariff.split("-")
-        months = months.strip()
-        price_value = price_value.strip()
-        month_word = (
-            "місяць"
-            if months == "1"
-            else "місяці"
-            if months in ["2", "3", "4"]
-            else "місяців"
-        )
-        formatted_tariffs.append(f"• {months} {month_word} - {price_value}₴")
+    formatted_tariffs = format_product_price_tariffs(price)
 
     message_text = (
         f"<b>{product_name}</b>\n\n"
@@ -499,21 +485,7 @@ async def cancel_delete_product(callback: CallbackQuery):
         else f"{get_premium_emoji('card')} Одноразова оплата"
     )
 
-    tariffs = [t.strip() for t in price.split(",")] if "," in price else [price]
-    formatted_tariffs = []
-
-    for tariff in tariffs:
-        months, price_value = tariff.split("-")
-        months = months.strip()
-        price_value = price_value.strip()
-        month_word = (
-            "місяць"
-            if months == "1"
-            else "місяці"
-            if months in ["2", "3", "4"]
-            else "місяців"
-        )
-        formatted_tariffs.append(f"• {months} {month_word} - {price_value}₴")
+    formatted_tariffs = format_product_price_tariffs(price)
 
     message_text = (
         f"<b>{product_name}</b>\n\n"
@@ -548,21 +520,7 @@ async def show_edit_options(callback: CallbackQuery):
         else f"{get_premium_emoji('card')} Одноразова оплата"
     )
 
-    tariffs = [t.strip() for t in price.split(",")] if "," in price else [price]
-    formatted_tariffs = []
-
-    for tariff in tariffs:
-        months, price_value = tariff.split("-")
-        months = months.strip()
-        price_value = price_value.strip()
-        month_word = (
-            "місяць"
-            if months == "1"
-            else "місяці"
-            if months in ["2", "3", "4"]
-            else "місяців"
-        )
-        formatted_tariffs.append(f"• {months} {month_word} - {price_value}₴")
+    formatted_tariffs = format_product_price_tariffs(price)
 
     message_text = (
         f"<b>{product_name}</b>\n\n"
@@ -598,21 +556,7 @@ async def back_to_product(callback: CallbackQuery):
         else f"{get_premium_emoji('card')} Одноразова оплата"
     )
 
-    tariffs = [t.strip() for t in price.split(",")] if "," in price else [price]
-    formatted_tariffs = []
-
-    for tariff in tariffs:
-        months, price_value = tariff.split("-")
-        months = months.strip()
-        price_value = price_value.strip()
-        month_word = (
-            "місяць"
-            if months == "1"
-            else "місяці"
-            if months in ["2", "3", "4"]
-            else "місяців"
-        )
-        formatted_tariffs.append(f"• {months} {month_word} - {price_value}₴")
+    formatted_tariffs = format_product_price_tariffs(price)
 
     message_text = (
         f"<b>{product_name}</b>\n\n"
@@ -746,21 +690,39 @@ async def process_new_price(message: types.Message, state: FSMContext):
     data = await state.get_data()
     product_id = data["product_id"]
 
-    try:
-        tariffs = message.text.split(",")
-        for tariff in tariffs:
-            months, price = tariff.strip().split("-")
-            months = int(months.strip())
-            price = float(price.strip())
-    except Exception:
-        await message.answer(
-            "Неправильний формат тарифів. Спробуйте ще раз.\n"
-            "Приклад: <code>1 - 150, 3 - 400, 12 - 1100</code>",
-            parse_mode="HTML",
-        )
-        return
+    text = message.text.strip()
+    price_to_save = text
+    if not is_tariff_price(text):
+        try:
+            num = float(text.replace(",", "."))
+            if num < 0:
+                raise ValueError("negative")
+            price_to_save = f"1 - {int(num) if num == int(num) else num}"
+        except (ValueError, TypeError):
+            await message.answer(
+                "Неправильний формат. Введіть число (наприклад 300) або тарифи: <code>12 - 300</code> або <code>6 - 899, 12 - 1550</code>",
+                parse_mode="HTML",
+            )
+            return
+    else:
+        try:
+            tariffs = text.split(",")
+            for tariff in tariffs:
+                part = tariff.strip()
+                if " - " in part:
+                    months, price = part.split(" - ", 1)
+                else:
+                    months, price = part.split("-", 1)
+                int(months.strip())
+                float(price.strip().replace("₴", "").strip())
+        except Exception:
+            await message.answer(
+                "Неправильний формат тарифів. Приклад: <code>1 - 150, 3 - 400, 12 - 1100</code>",
+                parse_mode="HTML",
+            )
+            return
 
-    if update_product_price(product_id, message.text):
+    if update_product_price(product_id, price_to_save):
         await show_updated_product(message, product_id)
     else:
         await message.answer("❌ Помилка при оновленні тарифів!")
@@ -813,21 +775,7 @@ async def show_updated_product(message: types.Message, product_id: int):
         else f"{get_premium_emoji('card')} Одноразова оплата"
     )
 
-    tariffs = [t.strip() for t in price.split(",")] if "," in price else [price]
-    formatted_tariffs = []
-
-    for tariff in tariffs:
-        months, price_value = tariff.split("-")
-        months = months.strip()
-        price_value = price_value.strip()
-        month_word = (
-            "місяць"
-            if months == "1"
-            else "місяці"
-            if months in ["2", "3", "4"]
-            else "місяців"
-        )
-        formatted_tariffs.append(f"• {months} {month_word} - {price_value}₴")
+    formatted_tariffs = format_product_price_tariffs(price)
 
     message_text = (
         f"<b>{product_name}</b>\n\n"

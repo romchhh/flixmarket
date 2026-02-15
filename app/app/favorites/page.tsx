@@ -146,19 +146,20 @@ export default function FavoritesPage() {
                 <div className="text-lg font-bold text-gray-900">
                   {formatPriceDisplay(product.product_price)}
                 </div>
-                {(product.payment_type === "recurring" || product.payment_type === "subscription") ? (() => {
+                {(() => {
                   const priceStr = typeof product.product_price === "string" ? product.product_price : String(product.product_price);
+                  const showPeriod = (product.payment_type === "recurring" || product.payment_type === "subscription") || isSubscriptionTariffsString(priceStr);
                   const period = getSubscriptionPeriodSummary(priceStr);
-                  return (
+                  return showPeriod ? (
                     <div className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-violet-100 to-fuchsia-100 px-2.5 py-1 text-xs font-medium text-violet-700 shadow-sm border border-violet-200/60">
                       <span>{period ?? "Підписка"}</span>
                     </div>
+                  ) : (
+                    <div className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 shadow-sm border border-gray-200/60">
+                      <span>Разова оплата</span>
+                    </div>
                   );
-                })() : (
-                  <div className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 shadow-sm border border-gray-200/60">
-                    <span>Разова оплата</span>
-                  </div>
-                )}
+                })()}
               </div>
             </Link>
           ))}

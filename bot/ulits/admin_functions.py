@@ -223,6 +223,91 @@ def get_entity_tags(entity, entity_text: str) -> tuple:
     return open_tag, close_tag
 
 
+def _month_word(months: str) -> str:
+    m = months.strip()
+    if m == "1":
+        return "місяць"
+    if m in ("2", "3", "4"):
+        return "місяці"
+    return "місяців"
+
+
+def is_tariff_price(price) -> bool:
+    """Чи виглядає ціна як тарифи: '12 - 300' або '6 - 899, 12 - 1550'."""
+    if price is None:
+        return False
+    s = str(price).strip()
+    if not s or s.replace(".", "").replace(",", "").isdigit():
+        return False
+    return " - " in s or ("-" in s and any(c.isdigit() for c in s))
+
+
+def format_product_price_tariffs(price) -> list[str]:
+    """
+    Повертає список рядків для блоку «Тарифи» в адмінці.
+    Ціна може бути числом (300) або рядком тарифів ('12 - 300', '6 - 899, 12 - 1550').
+    """
+    if price is None:
+        return ["—"]
+    s = str(price).strip()
+    if not s:
+        return ["—"]
+    if not is_tariff_price(s):
+        try:
+            num = float(s.replace(",", "."))
+            return [f"• Ціна: {int(num) if num == int(num) else num}₴"]
+        except ValueError:
+            return [f"• Ціна: {s}₴"]
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    result = []
+    for part in parts:
+        if " - " in part:
+            months, price_val = part.split(" - ", 1)
+            months, price_val = months.strip(), price_val.strip().replace("₴", "").strip()
+        elif "-" in part:
+            months, price_val = part.split("-", 1)
+            months, price_val = months.strip(), price_val.strip().replace("₴", "").strip()
+        else:
+            continue
+        if months and price_val:
+            result.append(f"• {months} {_month_word(months)} - {price_val}₴")
+    return result if result else ["—"]
+
+
+def format_product_button_label(product_name: str, price) -> str:
+    """
+    Текст кнопки товару в каталозі: «Назва - 12 міс 300» або «Назва 6 - 899, 12 - 1550».
+    """
+    name = (strip_html_for_button(product_name) or product_name or "").strip()
+    if not name:
+        name = "Товар"
+    if price is None:
+        return name
+    s = str(price).strip()
+    if not s:
+        return name
+    if not is_tariff_price(s):
+        try:
+            num = float(s.replace(",", "."))
+            return f"{name} - {int(num) if num == int(num) else num}"
+        except ValueError:
+            return f"{name} - {s}"
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    if len(parts) == 1:
+        part = parts[0]
+        if " - " in part:
+            months, price_val = part.split(" - ", 1)
+            months, price_val = months.strip(), price_val.strip().replace("₴", "").strip()
+        elif "-" in part:
+            months, price_val = part.split("-", 1)
+            months, price_val = months.strip(), price_val.strip().replace("₴", "").strip()
+        else:
+            return name
+        return f"{name} - {months} міс {price_val}"
+    short = ", ".join(parts)
+    return f"{name} {short}"
+
+
 def strip_html_for_button(text: str) -> str:
     """Прибирає HTML-теги з тексту для відображення в кнопках (де parse_mode недоступний)."""
     if not text:
