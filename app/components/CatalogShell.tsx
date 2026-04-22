@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { Heart, Search, LayoutGrid, Smartphone, X, Zap } from "lucide-react";
+import { Heart, Search, LayoutGrid, X, Zap } from "lucide-react";
 import { stripHtml, formatPriceDisplay, isSubscriptionTariffsString, getSubscriptionPeriodSummary } from "@/lib/text";
 
 type Product = {
@@ -143,24 +143,19 @@ export default function CatalogShell() {
             </div>
           </div>
         </div>
-        <Link
-          href="/catalog"
-          className="mx-4 mb-4 block bg-gradient-to-r from-violet-600 to-indigo-500 rounded-3xl p-5 text-white relative overflow-hidden hover:opacity-95 active:scale-[0.99] transition-all shadow-lg"
+        <a
+          href="https://t.me/FlixVPNBot?start=linktowatch_1"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mx-4 mb-4 block rounded-3xl overflow-hidden shadow-lg hover:opacity-95 active:scale-[0.99] transition-all"
+          aria-label="Відкрити банер у Telegram"
         >
-          <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-20">
-            <Smartphone className="w-24 h-24" strokeWidth={1.5} />
-          </div>
-          <div className="relative z-10">
-            <p className="text-sm opacity-90 mb-1">Підписки на сервіси в Telegram</p>
-            <h2 className="text-2xl font-bold leading-tight mb-3">
-              Підписки від 1 місяця. Оплачуйте щомісяця прямо в месенджері.
-            </h2>
-            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-white/95">
-              Перейти в каталог
-              <LayoutGrid className="w-4 h-4" />
-            </span>
-          </div>
-        </Link>
+          <img
+            src="/Gemini_Generated_Image_lgzyrnlgzyrnlgzy.png"
+            alt="Підписки на сервіси в Telegram"
+            className="block w-full h-auto"
+          />
+        </a>
       </div>
 
       <div className="px-4 py-4">
