@@ -151,7 +151,7 @@ export default function CatalogShell() {
           aria-label="Відкрити банер у Telegram"
         >
           <img
-            src="/Gemini_Generated_Image_lgzyrnlgzyrnlgzy.png"
+            src="/Gemini_Generated_Image_nys18tnys18tnys1.png"
             alt="Підписки на сервіси в Telegram"
             className="block w-full h-auto"
           />
