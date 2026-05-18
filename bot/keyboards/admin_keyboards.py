@@ -29,39 +29,39 @@ def create_post(user_data, user_id, url_buttons=None):
                 InlineKeyboardButton(text=button_text, url=button_url) for button_text, button_url in row
             ])
     inline_kb_list.append([
-        InlineKeyboardButton(text="Медіа", callback_data=f"media_"),
-        InlineKeyboardButton(text="Додати опис", callback_data=f"add_")
+        InlineKeyboardButton(text="Медіа", callback_data="mail_media"),
+        InlineKeyboardButton(text="Додати опис", callback_data="mail_add_desc")
     ])
     inline_kb_list.append([
-        InlineKeyboardButton(text="🔔" if user_data.get(user_id, {}).get('bell', 0) == 1 else "🔕", callback_data=f"bell_"),
-        InlineKeyboardButton(text="URL-кнопки", callback_data=f"url_buttons_")
+        InlineKeyboardButton(text="🔔" if user_data.get(user_id, {}).get('bell', 0) == 1 else "🔕", callback_data="mail_bell"),
+        InlineKeyboardButton(text="URL-кнопки", callback_data="mail_url_buttons")
     ])
     inline_kb_list.append([
-        InlineKeyboardButton(text="← Відміна", callback_data=f"back_to"),
-        InlineKeyboardButton(text="Далі →", callback_data=f"nextmailing_")
+        InlineKeyboardButton(text="← Відміна", callback_data="mail_back"),
+        InlineKeyboardButton(text="Далі →", callback_data="mail_next")
     ])
     return InlineKeyboardMarkup(inline_keyboard=inline_kb_list)
 
 
 def publish_post(user_data, user_id):
     inline_kb_list = [
-        [InlineKeyboardButton(text="💈 Опублікувати", callback_data=f"publish_")],
-        [InlineKeyboardButton(text="← Назад", callback_data=f"back_to")]
+        [InlineKeyboardButton(text="💈 Опублікувати", callback_data="mail_publish")],
+        [InlineKeyboardButton(text="← Назад", callback_data="mail_back")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_kb_list)
 
 
 def confirm_mailing():
     keyboard = [
-        [InlineKeyboardButton(text="✓ Так", callback_data=f"confirm_publish_")],
-        [InlineKeyboardButton(text="❌ Ні", callback_data="cancel_publish")]  
+        [InlineKeyboardButton(text="✓ Так", callback_data="mail_confirm_publish")],
+        [InlineKeyboardButton(text="❌ Ні", callback_data="mail_cancel_publish")]  
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def back_mailing_keyboard():
     inline_kb_list = [
-        [InlineKeyboardButton(text="Назад", callback_data="back_to_my_post")]
+        [InlineKeyboardButton(text="Назад", callback_data="mail_back_my_post")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_kb_list)
 
@@ -76,7 +76,7 @@ def post_keyboard(user_data, user_id, url_buttons=None):
 
 def get_broadcast_keyboard():
     keyboard = [
-        [InlineKeyboardButton(text="Зробити розсилку", callback_data="create_post")]
+        [InlineKeyboardButton(text="Зробити розсилку", callback_data="mail_create")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -388,14 +388,14 @@ def get_links_keyboard() -> InlineKeyboardMarkup:
         keyboard.append([
             InlineKeyboardButton(
                 text=f"{link[1]} ({visits} пер. / {registrations} реєстр. / {purchases} покуп.)",
-                callback_data=f"link_stats_{link[0]}"
+                callback_data=f"mlink_stats_{link[0]}"
             )
         ])
     
     keyboard.append([
         InlineKeyboardButton(
             text="➕ Додати посилання",
-            callback_data="add_link"
+            callback_data="mlink_add"
         )
     ])
     
@@ -413,11 +413,11 @@ def cancel_button() -> ReplyKeyboardMarkup:
 def get_link_stats_keyboard(link_id: int) -> InlineKeyboardMarkup:
     keyboard = [
         [
-            InlineKeyboardButton(text="✏️ Редагувати", callback_data=f"edit_link_{link_id}"),
-            InlineKeyboardButton(text="🗑 Видалити", callback_data=f"delete_link_{link_id}")
+            InlineKeyboardButton(text="✏️ Редагувати", callback_data=f"mlink_edit_{link_id}"),
+            InlineKeyboardButton(text="🗑 Видалити", callback_data=f"mlink_delete_{link_id}")
         ],
-        [InlineKeyboardButton(text="🔄 Оновити", callback_data=f"link_stats_{link_id}")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_links")]
+        [InlineKeyboardButton(text="🔄 Оновити", callback_data=f"mlink_stats_{link_id}")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="mlink_back")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -425,8 +425,8 @@ def get_link_stats_keyboard(link_id: int) -> InlineKeyboardMarkup:
 def get_delete_link_confirm_keyboard(link_id: int) -> InlineKeyboardMarkup:
     keyboard = [
         [
-            InlineKeyboardButton(text="✅ Так", callback_data=f"confirm_delete_{link_id}"),
-            InlineKeyboardButton(text="❌ Ні", callback_data="back_to_links")
+            InlineKeyboardButton(text="✅ Так", callback_data=f"mlink_confirm_del_{link_id}"),
+            InlineKeyboardButton(text="❌ Ні", callback_data="mlink_back")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)

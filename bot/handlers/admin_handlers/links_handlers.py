@@ -18,15 +18,19 @@ from ulits.admin_states import LinkStates
 router = Router()
 
 
+def _mlink_id(callback: types.CallbackQuery, prefix: str) -> int:
+    return int(callback.data.removeprefix(prefix))
+
+
 @router.message(IsAdmin(), lambda message: message.text == "Посилання")
 async def manage_links(message: types.Message):
     await message.answer("Оберіть посилання для перегляду статистики або додайте нове:", 
                         reply_markup=get_links_keyboard())
 
 
-@router.callback_query(IsAdmin(), F.data.startswith("link_stats_"))
+@router.callback_query(IsAdmin(), F.data.startswith("mlink_stats_"))
 async def show_link_stats(callback: types.CallbackQuery):
-    link_id = int(callback.data.split("_")[2])
+    link_id = _mlink_id(callback, "mlink_stats_")
     link_data = get_link_by_id(link_id)
     me = await bot.get_me()
     if link_data:
@@ -57,9 +61,9 @@ async def show_link_stats(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(IsAdmin(), F.data.startswith("edit_link_"))
+@router.callback_query(IsAdmin(), F.data.startswith("mlink_edit_"))
 async def edit_link_start(callback: types.CallbackQuery, state: FSMContext):
-    link_id = int(callback.data.split("_")[2])
+    link_id = _mlink_id(callback, "mlink_edit_")
     await state.update_data(edit_link_id=link_id)
     await callback.message.answer("Введіть нову назву для посилання:", reply_markup=cancel_button())
     await state.set_state(LinkStates.waiting_for_edit_name)
@@ -92,9 +96,9 @@ async def process_edit_link(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(IsAdmin(), F.data.startswith("delete_link_"))
+@router.callback_query(IsAdmin(), F.data.startswith("mlink_delete_"))
 async def delete_link_confirm(callback: types.CallbackQuery):
-    link_id = int(callback.data.split("_")[2])
+    link_id = _mlink_id(callback, "mlink_delete_")
     await callback.message.edit_text(
         "❗️ Ви впевнені, що хочете видалити це посилання?\n"
         "Цю дію неможливо відмінити.",
@@ -103,9 +107,9 @@ async def delete_link_confirm(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(IsAdmin(), F.data.startswith("confirm_delete_"))
+@router.callback_query(IsAdmin(), F.data.startswith("mlink_confirm_del_"))
 async def delete_link_process(callback: types.CallbackQuery):
-    link_id = int(callback.data.split("_")[2])
+    link_id = _mlink_id(callback, "mlink_confirm_del_")
     delete_link(link_id)
     
     await callback.message.edit_text(
@@ -116,7 +120,7 @@ async def delete_link_process(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(IsAdmin(), F.data == "back_to_links")
+@router.callback_query(IsAdmin(), F.data == "mlink_back")
 async def back_to_links(callback: types.CallbackQuery):
     await callback.message.edit_text(
         "Оберіть посилання для перегляду статистики або додайте нове:",
@@ -125,7 +129,7 @@ async def back_to_links(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(IsAdmin(), F.data == "add_link")
+@router.callback_query(IsAdmin(), F.data == "mlink_add")
 async def start_add_link(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("Введіть назву для нового посилання:", reply_markup=cancel_button())
     await state.set_state(LinkStates.waiting_for_name)

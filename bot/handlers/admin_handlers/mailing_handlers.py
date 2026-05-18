@@ -1,4 +1,4 @@
-from aiogram import Router, types
+from aiogram import Router, types, F
 from main import bot
 from ulits.filters import IsAdmin
 from aiogram.fsm.context import FSMContext
@@ -30,14 +30,14 @@ def initialize_user_data(user_id):
         user_data[user_id] = {}
 
 
-@router.callback_query(IsAdmin(), lambda c: c.data =="create_post")
+@router.callback_query(IsAdmin(), F.data == "mail_create")
 async def process_channel_selection(callback_query: CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
     initialize_user_data(user_id)
     
     await state.set_state(Mailing.content)
     inline_kb_list = [
-        [InlineKeyboardButton(text="Назад", callback_data="back_to_posts")]
+        [InlineKeyboardButton(text="Назад", callback_data="mail_back_posts")]
     ]
     reply_markup = InlineKeyboardMarkup(inline_keyboard=inline_kb_list)
 
@@ -87,7 +87,7 @@ async def handle_content(message: types.Message, state: FSMContext):
     await state.clear()
 
     
-@router.callback_query(lambda c: c.data.startswith('media_'))
+@router.callback_query(IsAdmin(), F.data == "mail_media")
 async def handle_media(callback_query: types.CallbackQuery, state: FSMContext):
     await state.set_state(Mailing.media)
     await callback_query.message.answer(
@@ -128,7 +128,7 @@ async def handle_media_content(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(lambda c: c.data.startswith('add_'))
+@router.callback_query(IsAdmin(), F.data == "mail_add_desc")
 async def handle_description(callback_query: types.CallbackQuery, state: FSMContext):
     await state.set_state(Mailing.description)
     await callback_query.message.answer(
@@ -161,7 +161,7 @@ async def handle_description_content(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(lambda c: c.data.startswith('url_buttons_'))
+@router.callback_query(IsAdmin(), F.data == "mail_url_buttons")
 async def handle_url_buttons(callback_query: types.CallbackQuery, state: FSMContext):
     await state.set_state(Mailing.url_buttons)
     await callback_query.message.answer(
@@ -201,7 +201,7 @@ async def handle_url_buttons_content(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(lambda c: c.data.startswith('bell_'))
+@router.callback_query(IsAdmin(), F.data == "mail_bell")
 async def handle_comments(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
     if 'bell' not in user_data[user_id]:
@@ -210,20 +210,20 @@ async def handle_comments(callback_query: types.CallbackQuery, state: FSMContext
     await callback_query.message.edit_reply_markup(reply_markup=create_post(user_data, user_id, user_data[user_id].get('url_buttons')))
 
     
-@router.callback_query(lambda c: c.data.startswith('nextmailing_'))
-async def handle_url_buttons(callback_query: types.CallbackQuery, state: FSMContext):
+@router.callback_query(IsAdmin(), F.data == "mail_next")
+async def handle_next_step(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
     
     await callback_query.message.answer("<b>💼 НАЛАШТУВАННЯ ВІДПРАВКИ</b>\n\n"
                                            f"Пост готовий до розсилки.", parse_mode='HTML', reply_markup=publish_post(user_data, user_id))
     
     
-@router.callback_query(lambda c: c.data.startswith('publish_'))
+@router.callback_query(IsAdmin(), F.data == "mail_publish")
 async def confirm_publish(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.message.edit_text("Ви впевнені, що хочете зробити розсилку?", reply_markup=confirm_mailing())
 
 
-@router.callback_query(lambda c: c.data.startswith('confirm_publish_'))
+@router.callback_query(IsAdmin(), F.data == "mail_confirm_publish")
 async def handle_publish_confirmation(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
     await callback_query.message.edit_text("Починаю розсилку...", reply_markup=None)
@@ -258,23 +258,23 @@ async def handle_publish_confirmation(callback_query: types.CallbackQuery, state
     await callback_query.message.answer(f"Пост опубліковано для {sent_count} користувачів!")
 
 
-@router.callback_query(lambda c: c.data == "back_to",)
-async def process_channel_info(callback_query: types.CallbackQuery):
+@router.callback_query(IsAdmin(), F.data == "mail_back")
+async def process_mail_back(callback_query: types.CallbackQuery):
     await callback_query.message.delete()
     
-@router.callback_query(IsAdmin(), lambda c: c.data == "back_to_my_post", StateFilter(Mailing.content, Mailing.media, Mailing.description, Mailing.url_buttons))
-async def process_channel_info(callback_query: types.CallbackQuery, state: FSMContext):
+@router.callback_query(IsAdmin(), F.data == "mail_back_my_post", StateFilter(Mailing.content, Mailing.media, Mailing.description, Mailing.url_buttons))
+async def process_mail_back_my_post(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.message.delete()
     await state.clear()
 
-@router.callback_query(IsAdmin(), lambda c: c.data == "back_to_posts", Mailing.content)
-async def process_channel_info(callback_query: types.CallbackQuery, state: FSMContext):
+@router.callback_query(IsAdmin(), F.data == "mail_back_posts", Mailing.content)
+async def process_mail_back_posts(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
     description = mailing_text
     await callback_query.message.edit_text(description, parse_mode='HTML', reply_markup=get_broadcast_keyboard())
 
     
-@router.callback_query(lambda c: c.data == 'cancel_publish')
+@router.callback_query(IsAdmin(), F.data == "mail_cancel_publish")
 async def cancel_publish(callback_query: types.CallbackQuery):
     await callback_query.answer("Публікацію скасовано.", show_alert=True)
  
