@@ -6,6 +6,7 @@ from aiogram.filters import Command
 from keyboards.client_keyboards import get_start_keyboard, get_socials_keyboard, get_manager_keyboard, get_catalog_keyboard, get_products_keyboard, get_product_info_keyboard, get_payment_keyboard, get_payment_choice_keyboard, get_profile_keyboard, get_back_to_profile_keyboard, get_referral_keyboard, get_contest_keyboard
 from Content.texts import get_greeting_message, get_about_text, get_faq_text, get_manager_text, get_help_text, get_referral_text, get_contest_text, MENU_EMOJI_IDS, get_calendar_emoji_html, get_tv_emoji_html, get_person_emoji_html, get_premium_emoji, format_date, format_product_name_for_display
 from database.client_db import create_table, check_user, add_user, create_products_table, get_product_by_id, save_payment_info, create_payments_table, create_subscriptions_table, get_user_info, get_user_subscriptions, get_user_name, cursor, conn, create_contest_table, get_partner_balance, get_partner_referral_percent, get_partner_earnings_history, create_withdrawal_request, deduct_partner_balance, add_subscription, get_product_type
+from database.links_db import LINK_START_PREFIX, increment_link_count, link_exists
 from ulits.monopay_functions import PaymentManager, check_pending_payments
 import asyncio
 import os
@@ -37,25 +38,27 @@ async def start(message: types.Message):
 
     create_contest_table()
 
-    if check_user(user_id):
+    user_exists = check_user(user_id)
+    if user_exists:
         await message.answer(get_greeting_message(), parse_mode="HTML", reply_markup=get_start_keyboard(user_id))
         return
 
-    args = message.text.split()[1] if len(message.text.split()) > 1 else None
-    if args:
-        # Перевіряємо, чи це посилання для конкурсу
-        if args.startswith("Eve12nt145Q_"):
-            ref_id = int(args.split("_")[1])
+    parts = message.text.split()
+    payload = parts[1] if len(parts) > 1 else None
+    ref_id = None
+    marketing_link_id = None
+
+    if payload:
+        if payload.startswith("Eve12nt145Q_"):
+            ref_id = int(payload.split("_")[1])
             user_name = get_user_name(ref_id)
-            
-            # Додаємо запис про участь в конкурсі
+
             cursor.execute("""
                 INSERT INTO contest (user_id, invite_id, invite_date)
                 VALUES (?, ?, datetime('now'))
             """, (user_id, ref_id))
             conn.commit()
-            
-            # Повідомлення для нового учасника
+
             await bot.send_message(
                 user_id,
                 "🎉 <b>Вітаємо! Ви берете участь у розіграші призів!</b>\n\n"
@@ -69,8 +72,7 @@ async def start(message: types.Message):
                 "Запрошуйте друзів і збільшуйте свої шанси на перемогу! 🎁",
                 parse_mode="HTML"
             )
-            
-            # Повідомлення для того, хто запросив
+
             await bot.send_message(
                 ref_id,
                 f"🎯 <b>Вітаємо! @{message.from_user.username if message.from_user.username else message.from_user.id} "
@@ -79,29 +81,36 @@ async def start(message: types.Message):
                 "Продовжуйте запрошувати друзів, щоб збільшити свої шанси!",
                 parse_mode="HTML"
             )
-        else:
-            # Партнерське посилання: зберігаємо ref_id для нарахувань партнеру
-            ref_id = int(args)
+        elif payload.startswith(LINK_START_PREFIX):
             try:
-                user_name = get_user_name(ref_id) or str(ref_id)
-            except (TypeError, IndexError):
-                user_name = str(ref_id)
-            await bot.send_message(
-                user_id,
-                f"<b>{get_premium_emoji('wave')} Вас запросив @{user_name}</b>\n\n"
-                "Ласкаво просимо! Обирайте підписки у каталозі.",
-                parse_mode="HTML",
-            )
-            await bot.send_message(
-                ref_id,
-                f"<b>{get_person_emoji_html()} Користувач @{message.from_user.username or message.from_user.id} перейшов за вашим посиланням.</b>\n\n"
-                "Від кожної його покупки вам нараховуватиметься % на партнерський баланс.",
-                parse_mode="HTML",
-            )
-    else:
-        ref_id = None
-    
-    add_user(user_id, message.from_user.username, ref_id)
+                link_id = int(payload.split("_")[1])
+                if link_exists(link_id):
+                    marketing_link_id = link_id
+                    increment_link_count(link_id)
+            except (ValueError, IndexError):
+                pass
+        elif payload.isdigit():
+            rid = int(payload)
+            if rid != user_id and check_user(rid):
+                ref_id = rid
+                try:
+                    user_name = get_user_name(ref_id) or str(ref_id)
+                except (TypeError, IndexError):
+                    user_name = str(ref_id)
+                await bot.send_message(
+                    user_id,
+                    f"<b>{get_premium_emoji('wave')} Вас запросив @{user_name}</b>\n\n"
+                    "Ласкаво просимо! Обирайте підписки у каталозі.",
+                    parse_mode="HTML",
+                )
+                await bot.send_message(
+                    ref_id,
+                    f"<b>{get_person_emoji_html()} Користувач @{message.from_user.username or message.from_user.id} перейшов за вашим посиланням.</b>\n\n"
+                    "Від кожної його покупки вам нараховуватиметься % на партнерський баланс.",
+                    parse_mode="HTML",
+                )
+
+    add_user(user_id, message.from_user.username, ref_id, marketing_link_id)
     await message.answer(get_greeting_message(), parse_mode="HTML", reply_markup=get_start_keyboard(user_id))
 
 

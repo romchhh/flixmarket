@@ -22,7 +22,7 @@ async def main():
     from handlers.admin_handlers.mailing_handlers import router as mailing_router
     from handlers.admin_handlers.admin_partner_handlers import router as admin_partner_router
     from handlers.client_handlers.profile_handlers import router as profile_router
-
+    from handlers.admin_handlers.links_handlers import router as links_router
     from database.client_db import create_tables
 
     dp.include_router(client_router)
@@ -32,6 +32,7 @@ async def main():
     dp.include_router(mailing_router)
     dp.include_router(admin_partner_router)
     dp.include_router(profile_router)
+    dp.include_router(links_router)
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 

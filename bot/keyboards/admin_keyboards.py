@@ -1,6 +1,6 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, KeyboardButton, ReplyKeyboardMarkup
 from database.client_db import get_product_types, get_products_by_catalog
-
+from database.links_db import get_all_links
 
 def get_write_to_user_keyboard(user_id: int) -> InlineKeyboardMarkup:
     """Клавіатура з кнопкою «Написати користувачу» (для адмін-повідомлень)."""
@@ -373,3 +373,60 @@ def get_confirm_run_payments_keyboard() -> InlineKeyboardMarkup:
         ]
     ])
 
+
+
+
+# LINKS KEYBOARD
+def get_links_keyboard() -> InlineKeyboardMarkup:
+    keyboard = []
+    links = get_all_links()
+    
+    for link in links:
+        visits = link[3] if len(link) > 3 else 0
+        registrations = link[4] if len(link) > 4 else 0
+        purchases = link[5] if len(link) > 5 else 0
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"{link[1]} ({visits} пер. / {registrations} реєстр. / {purchases} покуп.)",
+                callback_data=f"link_stats_{link[0]}"
+            )
+        ])
+    
+    keyboard.append([
+        InlineKeyboardButton(
+            text="➕ Додати посилання",
+            callback_data="add_link"
+        )
+    ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+
+def cancel_button() -> ReplyKeyboardMarkup:
+    keyboard = [
+        [KeyboardButton(text="Скасувати")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def get_link_stats_keyboard(link_id: int) -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton(text="✏️ Редагувати", callback_data=f"edit_link_{link_id}"),
+            InlineKeyboardButton(text="🗑 Видалити", callback_data=f"delete_link_{link_id}")
+        ],
+        [InlineKeyboardButton(text="🔄 Оновити", callback_data=f"link_stats_{link_id}")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_links")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_delete_link_confirm_keyboard(link_id: int) -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton(text="✅ Так", callback_data=f"confirm_delete_{link_id}"),
+            InlineKeyboardButton(text="❌ Ні", callback_data="back_to_links")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)

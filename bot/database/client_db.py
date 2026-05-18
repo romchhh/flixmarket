@@ -87,17 +87,38 @@ def get_username_by_id(user_id: int) -> str:
     return (row[0] or str(user_id)) if row else str(user_id)
     
     
-def add_user(user_id, user_name, ref_id):
+def migrate_users_marketing_link():
+    cursor.execute("PRAGMA table_info(users)")
+    columns = {column[1] for column in cursor.fetchall()}
+    if "marketing_link_id" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN marketing_link_id INTEGER")
+        conn.commit()
+
+
+def get_marketing_link_id_by_user(user_id: int):
+    cursor.execute(
+        "SELECT marketing_link_id FROM users WHERE user_id = ?",
+        (user_id,),
+    )
+    row = cursor.fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+def add_user(user_id, user_name, ref_id, marketing_link_id=None):
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     existing_user = cursor.fetchone()
     if existing_user is None:
         current_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         try:
             cursor.execute('''
-                INSERT INTO users (user_id, user_name, ref_id, join_date)
-                VALUES (?, ?, ?, ?)
-                ''', (user_id, user_name, ref_id, current_date))
+                INSERT INTO users (user_id, user_name, ref_id, join_date, marketing_link_id)
+                VALUES (?, ?, ?, ?, ?)
+                ''', (user_id, user_name, ref_id, current_date, marketing_link_id))
             conn.commit()
+            if marketing_link_id:
+                from database.links_db import link_exists, increment_link_registrations
+                if link_exists(marketing_link_id):
+                    increment_link_registrations(marketing_link_id)
             print(f"User {user_id} added successfully")  # Логування
         except Exception as e:
             print(f"Error inserting user: {e}")  # Вивід помилки
@@ -950,3 +971,6 @@ def create_tables():
     create_partner_earnings_table()
     create_partner_withdrawal_requests_table()
     migrate_partner_withdrawal_payout_details()
+    migrate_users_marketing_link()
+    from database.links_db import create_table_links
+    create_table_links()

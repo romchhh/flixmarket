@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from database.client_db import get_active_subscriptions, get_active_recurring_subscriptions, get_user_token, update_subscription_next_payment, increment_payment_failures, deactivate_subscription, save_subscription_payment, get_ref_id_by_user, add_partner_credit, get_partner_referral_percent, get_username_by_id
+from database.links_db import track_link_purchase
 from ulits.monopay_functions import PaymentManager
 from Content.texts import get_premium_emoji
 from Content.texts import (
@@ -275,6 +276,7 @@ async def process_recurring_payments():
                     # Оновлюємо дату наступного платежу
                     logging.info(f"📅 Оновлення дати наступного платежу для підписки {subscription_id}")
                     update_subscription_next_payment(subscription_id, months)
+                    track_link_purchase(user_id)
 
                     ref_id = get_ref_id_by_user(user_id)
                     if ref_id:
@@ -617,6 +619,7 @@ async def check_processing_payments():
                     
                     # Оновлюємо дату наступного платежу
                     update_subscription_next_payment(subscription_id, months)
+                    track_link_purchase(user_id)
 
                     ref_id = get_ref_id_by_user(user_id)
                     if ref_id:

@@ -28,3 +28,8 @@ class EditProduct(StatesGroup):
 
 class SearchSubscription(StatesGroup):
     waiting_for_query = State()
+
+
+class LinkStates(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_edit_name = State()

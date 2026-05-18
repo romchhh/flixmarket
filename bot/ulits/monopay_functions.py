@@ -17,6 +17,7 @@ from database.client_db import (
     add_partner_credit,
     get_partner_referral_percent,
 )
+from database.links_db import track_link_purchase
 from main import bot
 from config import admin_chat_id, XTOKEN
 from keyboards.client_keyboards import get_channel_keyboard, get_manager_keyboard
@@ -297,6 +298,7 @@ async def check_pending_payments():
                     
                     username = get_username_by_id(user_id)
                     update_payment_status(invoice_id, "success")
+                    track_link_purchase(user_id)
 
                     product = get_product_by_id(product_id)
                     product_name_for_partner = product[0] if product else ""
