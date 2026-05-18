@@ -18,7 +18,7 @@ from aiogram.fsm.context import FSMContext
 from config import admin_chat_id, MIN_WITHDRAWAL, CATALOG_IMAGE_PATH
 from ulits.path_utils import resolve_media_path
 from html import escape
-
+from database.links_db import create_table_links
 
 router = Router()
 
@@ -678,6 +678,7 @@ async def agree_subscription_terms(callback: types.CallbackQuery):
 
 async def on_startup(router):
     me = await bot.get_me()
+    create_table_links()        
     await scheduler_jobs()
     if admin_chat_id:
         try:
