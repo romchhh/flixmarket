@@ -14,7 +14,7 @@ def admin_keyboard():
         [KeyboardButton(text="Розсилка") ,KeyboardButton(text="Статистика")],
         [KeyboardButton(text="Управління підписками")],
         [KeyboardButton(text="Управління товарами"), KeyboardButton(text="➕ Додати товар")],
-        [KeyboardButton(text="👥 Партнерська програма")],
+        [KeyboardButton(text="👥 Партнерська програма") , KeyboardButton(text="Посилання")],
         [KeyboardButton(text="Головне меню")],
     ]
     keyboard = ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
