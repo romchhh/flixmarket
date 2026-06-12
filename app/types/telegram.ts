@@ -21,7 +21,7 @@ export interface TelegramWebApp {
   ready?: () => void;
   disableVerticalSwipes?: () => void;
   enableClosingConfirmation?: () => void;
-  openLink?: (url: string) => void;
+  openLink?: (url: string, options?: { try_instant_view?: boolean }) => void;
   openTelegramLink?: (url: string) => void;
   showAlert?: (message: string) => void;
   HapticFeedback?: {

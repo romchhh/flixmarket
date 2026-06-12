@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ChevronLeft, CreditCard, Package, ThumbsUp, Share2, Heart } from "lucide-react";
 import { ShareModal } from "@/components/ShareModal";
 import { stripHtml, formatPriceDisplay, isSubscriptionTariffsString, getSubscriptionTariffEntries, getSubscriptionPeriodSummary } from "@/lib/text";
+import { openExternalLink } from "@/lib/openExternalLink";
 
 const TELEGRAM_ICON = (
   <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
@@ -30,12 +31,6 @@ function getInitData(): string {
   if (typeof window === "undefined") return "";
   const init = (window as unknown as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData;
   return typeof init === "string" ? init : "";
-}
-
-/** Відкриває сторінку оплати в тому ж вікні (в межах міні-додатку). Після оплати Monobank перенаправить на redirectUrl (додаток або бот). */
-function openPaymentUrl(url: string) {
-  if (typeof window === "undefined") return;
-  window.location.href = url;
 }
 
 export default function ProductPage() {
@@ -180,7 +175,7 @@ export default function ProductPage() {
       .then((r) => r.json())
       .then((data) => {
         if (data.pageUrl) {
-          openPaymentUrl(data.pageUrl);
+          openExternalLink(data.pageUrl);
         } else {
           setPaymentError(data.error || "Не вдалося створити платіж");
         }
