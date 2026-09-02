@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import BottomNav from "@/components/BottomNav";
+import ShopFooter from "@/components/ShopFooter";
 
 declare global {
   interface Window {
@@ -41,7 +42,10 @@ export default function ShopLayoutClient({
 
   return (
     <>
-      <div className="min-h-screen pb-24">{children}</div>
+      <div className="min-h-screen pb-24 flex flex-col">
+        <div className="flex-1">{children}</div>
+        <ShopFooter />
+      </div>
       <BottomNav />
     </>
   );
