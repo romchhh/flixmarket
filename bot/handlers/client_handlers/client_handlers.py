@@ -27,7 +27,7 @@ payment_manager = PaymentManager()
 async def scheduler_jobs():
     scheduler.add_job(check_pending_payments, "interval", minutes=0.5)
     scheduler.add_job(check_expiring_subscriptions, "cron", hour=16, minute=0)
-    scheduler.add_job(process_recurring_payments, "interval", hours=6)
+    scheduler.add_job(process_recurring_payments, "interval", hours=12)
 
 
 
@@ -459,10 +459,13 @@ async def process_buy(callback: types.CallbackQuery):
             f"Сума: <b>{discounted_price}₴</b>\n\n"
             f"<b>⚠️ Важливо:</b>\n"
             f"• Після успішної оплати буде активована автоматична підписка\n"
-            f"• Кошти будуть автоматично списуватися кожні {months} {'місяць' if months == 1 else 'місяці' if months in [2,3,4] else 'місяців'}\n"
+            f"• Кошти будуть автоматично списуватися кожні {months} {'місяць' if months == 1 else 'місяці' if months in [2,3,4] else 'місяців'} "
+            f"(на той самий строк, що ви обрали)\n"
             f"• Ваша картка буде збережена для подальших платежів\n"
             f"• Ви можете скасувати підписку в будь-який час у своєму профілі\n"
-            f"• При скасуванні підписки доступ зберігається до кінця оплаченого періоду\n\n"
+            f"• При скасуванні підписки доступ зберігається до кінця оплаченого періоду\n"
+            f"• У разі невдалого списання зробимо кілька спроб протягом кількох днів; "
+            f"якщо оплата так і не пройде — підписку буде скасовано\n\n"
             f"Продовжуючи, ви погоджуєтеся з умовами автоматичної підписки."
         )
         

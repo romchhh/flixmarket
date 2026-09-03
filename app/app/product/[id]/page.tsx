@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft, CreditCard, Package, ThumbsUp, Share2, Heart } from "lucide-react";
 import { ShareModal } from "@/components/ShareModal";
+import SubscriptionTermsModal from "@/components/SubscriptionTermsModal";
 import { stripHtml, formatPriceDisplay, isSubscriptionTariffsString, getSubscriptionTariffEntries, getSubscriptionPeriodSummary } from "@/lib/text";
 import { openExternalLink } from "@/lib/openExternalLink";
 
@@ -47,6 +48,7 @@ export default function ProductPage() {
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [shareReferralLink, setShareReferralLink] = useState("");
   const [isLiked, setIsLiked] = useState(false);
+  const [termsMonths, setTermsMonths] = useState<number | null>(null);
 
   const fetchProduct = () => {
     setLoading(true);
@@ -159,7 +161,7 @@ export default function ProductPage() {
     }
   }, [shareModalOpen, resolvedBotLink]);
 
-  const handlePayWithMonobank = (months: number) => {
+  const startPayment = (months: number) => {
     const initData = getInitData();
     if (!initData) {
       setPaymentError("Відкрийте додаток з Telegram");
@@ -175,6 +177,7 @@ export default function ProductPage() {
       .then((r) => r.json())
       .then((data) => {
         if (data.pageUrl) {
+          setTermsMonths(null);
           openExternalLink(data.pageUrl);
         } else {
           setPaymentError(data.error || "Не вдалося створити платіж");
@@ -183,6 +186,29 @@ export default function ProductPage() {
       .catch(() => setPaymentError("Помилка мережі"))
       .finally(() => setPaymentLoading(false));
   };
+
+  const handlePayWithMonobank = (months: number) => {
+    const isSub =
+      product?.payment_type === "subscription" || product?.payment_type === "recurring";
+    if (isSub) {
+      setPaymentError(null);
+      setTermsMonths(months);
+      return;
+    }
+    startPayment(months);
+  };
+
+  const termsPriceLabel = (() => {
+    if (termsMonths == null || !product) return "";
+    const priceStr = typeof product.product_price === "string" ? product.product_price : String(product.product_price);
+    if (isSubscriptionTariffsString(priceStr)) {
+      const entry = getSubscriptionTariffEntries(priceStr).find(
+        (t) => parseInt(t.months, 10) === termsMonths
+      );
+      if (entry) return `${entry.price} ₴`;
+    }
+    return formatPriceDisplay(product.product_price);
+  })();
 
   if (loading) {
     return (
@@ -285,6 +311,20 @@ export default function ProductPage() {
         shareLink={shareReferralLink}
         shareText={product ? `${stripHtml(product.product_name)} — Flix Market` : "Flix Market"}
         tg={typeof window !== "undefined" ? (window as unknown as { Telegram?: { WebApp?: import("@/types/telegram").TelegramWebApp } }).Telegram?.WebApp ?? null : null}
+      />
+
+      <SubscriptionTermsModal
+        open={termsMonths != null}
+        productName={stripHtml(product.product_name)}
+        months={termsMonths ?? 1}
+        priceLabel={termsPriceLabel}
+        loading={paymentLoading}
+        onClose={() => {
+          if (!paymentLoading) setTermsMonths(null);
+        }}
+        onConfirm={() => {
+          if (termsMonths != null) startPayment(termsMonths);
+        }}
       />
 
       <div className="px-4 pt-4">

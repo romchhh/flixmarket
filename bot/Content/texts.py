@@ -454,8 +454,21 @@ def get_admin_auto_payment_success_text(
     )
 
 
-def get_user_auto_payment_failed_text(product_name: str, masked_card: str) -> str:
+def get_user_auto_payment_failed_text(
+    product_name: str,
+    masked_card: str,
+    failures: int = None,
+    max_failures: int = 3,
+    retry_days: int = 1,
+) -> str:
     """Текст користувачу: не вдалося провести автоматичний платіж."""
+    retry_info = (
+        f"Спроба {failures} з {max_failures}. Наступну спробу зробимо через {retry_days} "
+        f"{'день' if retry_days == 1 else 'дні' if retry_days in (2, 3, 4) else 'днів'}.\n"
+        f"Після {max_failures} невдалих спроб підписку буде автоматично скасовано.\n\n"
+        if failures is not None
+        else "Ми спробуємо ще раз через деякий час. Якщо проблема повториться, підписка буде скасована.\n\n"
+    )
     return (
         f"❌ <b>Не вдалося провести автоматичний платіж</b>\n\n"
         f"Підписка: <b>{product_name}</b>\n"
@@ -464,7 +477,8 @@ def get_user_auto_payment_failed_text(product_name: str, masked_card: str) -> st
         f"• Недостатньо коштів на картці\n"
         f"• Картка заблокована\n"
         f"• Технічна помилка\n\n"
-        f"Ми спробуємо ще раз через деякий час. Якщо проблема повториться, підписка буде скасована."
+        f"{retry_info}"
+        f"Переконайтеся, що на картці достатньо коштів, або скасуйте автопродовження в профілі."
     )
 
 

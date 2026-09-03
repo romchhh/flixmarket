@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from database.client_db import get_active_subscriptions, get_active_recurring_subscriptions, get_user_token, update_subscription_next_payment, increment_payment_failures, deactivate_subscription, save_subscription_payment, get_ref_id_by_user, add_partner_credit, get_partner_referral_percent, get_username_by_id
+from database.client_db import get_active_subscriptions, get_active_recurring_subscriptions, get_user_token, update_subscription_next_payment, increment_payment_failures, postpone_subscription_retry, reset_payment_failures, deactivate_subscription, save_subscription_payment, get_ref_id_by_user, add_partner_credit, get_partner_referral_percent, get_username_by_id
 from database.links_db import track_link_purchase
 from ulits.monopay_functions import PaymentManager
 from Content.texts import get_premium_emoji
@@ -22,6 +22,58 @@ from keyboards.client_keyboards import get_services_keyboard
 from ulits.client_functions import get_days_word
 from config import administrators, admin_chat_id
 import time
+
+# Повторні списання: кілька спроб з інтервалом у дні, потім деактивація
+MAX_PAYMENT_FAILURES = 3
+RETRY_DELAY_DAYS = 1
+
+
+async def handle_recurring_payment_failure(
+    subscription_id: int,
+    user_id: int,
+    product_name: str,
+    masked_card: str = None,
+    invoice_id: str = None,
+    card_token: str = None,
+    failure_reason: str = None,
+    notify: bool = True,
+) -> bool:
+    """
+    Фіксує невдалу спробу автосписання.
+    Відкладає наступну спробу на RETRY_DELAY_DAYS.
+    Після MAX_PAYMENT_FAILURES — деактивує підписку.
+    Повертає True, якщо підписку деактивовано.
+    """
+    failures = increment_payment_failures(subscription_id)
+    logging.info(
+        f"📊 Підписка {subscription_id}: невдалих спроб {failures}/{MAX_PAYMENT_FAILURES}"
+    )
+
+    if failures >= MAX_PAYMENT_FAILURES:
+        logging.warning(
+            f"🚫 Підписка {subscription_id} деактивується після {failures} невдалих спроб"
+        )
+        deactivate_subscription(subscription_id)
+        await notify_user_subscription_cancelled(user_id, product_name)
+        return True
+
+    postpone_subscription_retry(subscription_id, RETRY_DELAY_DAYS)
+    logging.info(
+        f"⏳ Наступна спроба для підписки {subscription_id} через {RETRY_DELAY_DAYS} дн."
+    )
+    if notify:
+        await notify_user_payment_failed(
+            user_id=user_id,
+            product_name=product_name,
+            masked_card=masked_card or "****",
+            invoice_id=invoice_id,
+            card_token=card_token,
+            failure_reason=failure_reason,
+            failures=failures,
+            max_failures=MAX_PAYMENT_FAILURES,
+            retry_days=RETRY_DELAY_DAYS,
+        )
+    return False
 
 
 async def check_expiring_subscriptions():
@@ -85,7 +137,12 @@ async def process_recurring_payments():
                 token_data = get_user_token(user_id)
                 if not token_data:
                     logging.error(f"❌ Токен не знайдено для користувача {user_id}")
-                    await increment_payment_failures(subscription_id)
+                    await handle_recurring_payment_failure(
+                        subscription_id=subscription_id,
+                        user_id=user_id,
+                        product_name=product_name,
+                        failure_reason="Токен картки не знайдено",
+                    )
                     continue
                 
                 wallet_id_db, card_token, masked_card, card_type = token_data
@@ -150,42 +207,14 @@ async def process_recurring_payments():
                         logging.error(f"🚫 Токен картки не знайдено для підписки {subscription_id}. Деактивуємо підписку.")
                         deactivate_subscription(subscription_id)
                         await notify_user_token_invalid(user_id, product_name, masked_card, err_text)
-                    elif err_code == 'ERROR_VISA' or 'no longer allowed' in err_text:
-                        # Картка заблокована - збільшуємо лічильник помилок
-                        logging.warning(f"⚠️ Картка заблокована для підписки {subscription_id}")
-                        increment_payment_failures(subscription_id)
-                        await notify_user_payment_failed(
-                            user_id=user_id,
-                            product_name=product_name,
-                            masked_card=masked_card,
-                            invoice_id=None,
-                            card_token=None,
-                            failure_reason=err_text
-                        )
                     else:
-                        # Інші помилки - збільшуємо лічильник помилок
-                        increment_payment_failures(subscription_id)
-                        await notify_user_payment_failed(
+                        await handle_recurring_payment_failure(
+                            subscription_id=subscription_id,
                             user_id=user_id,
                             product_name=product_name,
                             masked_card=masked_card,
-                            invoice_id=None,
-                            card_token=None,
-                            failure_reason=err_text
+                            failure_reason=err_text,
                         )
-                    
-                    # Перевіряємо ліміт помилок
-                    from database.client_db import cursor
-                    cursor.execute("""
-                        SELECT payment_failures FROM recurring_subscriptions WHERE id = ?
-                    """, (subscription_id,))
-                    result = cursor.fetchone()
-                    current_failures = result[0] if result else 0
-                    
-                    if current_failures >= 3:
-                        logging.warning(f"🚫 Підписка {subscription_id} деактивується через перевищення ліміту помилок")
-                        deactivate_subscription(subscription_id)
-                        await notify_user_subscription_cancelled(user_id, product_name)
                     
                     continue  # Переходимо до наступної підписки
                 
@@ -245,9 +274,16 @@ async def process_recurring_payments():
                         payment_id=local_payment_id,
                         error_message=f"Не вдалося отримати статус після {max_attempts} спроб"
                     )
-                    increment_payment_failures(subscription_id)
+                    await handle_recurring_payment_failure(
+                        subscription_id=subscription_id,
+                        user_id=user_id,
+                        product_name=product_name,
+                        invoice_id=invoice_id,
+                        failure_reason=f"Не вдалося отримати статус після {max_attempts} спроб",
+                        notify=False,
+                    )
                     continue
-                
+                    
                 # Витягуємо детальну інформацію з payment_status для перевірки
                 payment_info = payment_status.get('paymentInfo', {})
                 status_masked_card = payment_info.get('maskedPan') or masked_card
@@ -276,6 +312,7 @@ async def process_recurring_payments():
                     # Оновлюємо дату наступного платежу
                     logging.info(f"📅 Оновлення дати наступного платежу для підписки {subscription_id}")
                     update_subscription_next_payment(subscription_id, months)
+                    reset_payment_failures(subscription_id)
                     track_link_purchase(user_id)
 
                     ref_id = get_ref_id_by_user(user_id)
@@ -331,7 +368,6 @@ async def process_recurring_payments():
                     logging.info(f"⏳ Платіж {invoice_id} залишається в обробці, дата наступного платежу НЕ оновлена")
                     
                 elif current_status == 'failure':
-                    # Невдалий платіж
                     failure_reason = payment_status.get('failureReason', 'Невідома помилка')
                     logging.warning(f"❌ Невдалий платіж для підписки {subscription_id}: {failure_reason}")
                     
@@ -345,33 +381,17 @@ async def process_recurring_payments():
                         error_message=failure_reason
                     )
                     
-                    # Збільшуємо лічильник помилок
-                    logging.info(f"⚠️ Збільшення лічильника помилок для підписки {subscription_id}")
-                    increment_payment_failures(subscription_id)
-                    
-                    # Перевіряємо, чи не перевищено ліміт помилок
-                    current_failures = payment_status.get('payment_failures', 0)
-                    logging.info(f"📊 Поточні помилки: {current_failures}/3")
-                    
-                    if current_failures >= 3:
-                        logging.warning(f"🚫 Підписка {subscription_id} деактивується через перевищення ліміту помилок")
-                        deactivate_subscription(subscription_id)
-                        await notify_user_subscription_cancelled(user_id, product_name)
-                        logging.warning(f"❌ Підписка {subscription_id} деактивована через багато помилок")
-                    else:
-                        logging.info(f"📱 Відправка повідомлення користувачу {user_id} про невдалий платіж")
-                        await notify_user_payment_failed(
-                            user_id=user_id, 
-                            product_name=product_name, 
-                            masked_card=status_masked_card,
-                            invoice_id=invoice_id,
-                            card_token=card_token,
-                            failure_reason=failure_reason
-                        )
-                        logging.warning(f"⚠️ Невдалий платіж для підписки {subscription_id}, invoice_id={invoice_id}")
+                    await handle_recurring_payment_failure(
+                        subscription_id=subscription_id,
+                        user_id=user_id,
+                        product_name=product_name,
+                        masked_card=status_masked_card,
+                        invoice_id=invoice_id,
+                        card_token=card_token,
+                        failure_reason=failure_reason,
+                    )
                 
                 elif current_status == 'expired':
-                    # Рахунок застарів - обробляємо як невдалий платіж
                     logging.warning(f"⏰ Рахунок {invoice_id} для підписки {subscription_id} застарів")
                     save_subscription_payment(
                         subscription_id=subscription_id,
@@ -382,16 +402,15 @@ async def process_recurring_payments():
                         payment_id=local_payment_id,
                         error_message='Рахунок застарів'
                     )
-                    increment_payment_failures(subscription_id)
-                    await notify_user_payment_failed(
+                    await handle_recurring_payment_failure(
+                        subscription_id=subscription_id,
                         user_id=user_id,
                         product_name=product_name,
                         masked_card=status_masked_card,
                         invoice_id=invoice_id,
                         card_token=card_token,
-                        failure_reason='Рахунок застарів'
+                        failure_reason='Рахунок застарів',
                     )
-                    logging.warning(f"⏰ Рахунок {invoice_id} застарів, підписка {subscription_id}")
                 
                 else:
                     logging.warning(f"❓ Невідомий статус платежу: {current_status}")
@@ -404,7 +423,14 @@ async def process_recurring_payments():
                         payment_id=local_payment_id,
                         error_message=f"Невідомий статус: {current_status}"
                     )
-                    increment_payment_failures(subscription_id)
+                    await handle_recurring_payment_failure(
+                        subscription_id=subscription_id,
+                        user_id=user_id,
+                        product_name=product_name,
+                        masked_card=status_masked_card,
+                        invoice_id=invoice_id,
+                        failure_reason=f"Невідомий статус: {current_status}",
+                    )
                 
             except Exception as e:
                 logging.error(f"💥 Помилка при обробці підписки {subscription_id}: {e}")
@@ -415,7 +441,13 @@ async def process_recurring_payments():
                     status='error',
                     error_message=str(e)
                 )
-                increment_payment_failures(subscription_id)
+                await handle_recurring_payment_failure(
+                    subscription_id=subscription_id,
+                    user_id=user_id,
+                    product_name=product_name,
+                    failure_reason=str(e),
+                    notify=False,
+                )
                 
         logging.info("✅ Завершено обробку повторюваних платежів")
                 
@@ -459,11 +491,19 @@ async def notify_user_payment_success(user_id: int, product_name: str, amount: f
 
 async def notify_user_payment_failed(user_id: int, product_name: str, masked_card: str,
                                      invoice_id: str = None, card_token: str = None,
-                                     failure_reason: str = None):
+                                     failure_reason: str = None,
+                                     failures: int = None, max_failures: int = 3,
+                                     retry_days: int = 1):
     try:
         await bot.send_message(
             user_id,
-            get_user_auto_payment_failed_text(product_name, masked_card),
+            get_user_auto_payment_failed_text(
+                product_name,
+                masked_card,
+                failures=failures,
+                max_failures=max_failures,
+                retry_days=retry_days,
+            ),
             parse_mode="HTML",
         )
         username = get_username_by_id(user_id)
@@ -573,7 +613,7 @@ async def notify_admins_subscription_stats():
 async def check_processing_payments():
     """Перевіряє платежі, які залишилися в статусі processing"""
     try:
-        from database.client_db import cursor, conn, get_user_token, update_subscription_next_payment, increment_payment_failures
+        from database.client_db import cursor, conn, get_user_token, update_subscription_next_payment, reset_payment_failures
         from ulits.monopay_functions import PaymentManager
         
         logging.info("🔍 Перевірка платежів в статусі processing...")
@@ -619,6 +659,7 @@ async def check_processing_payments():
                     
                     # Оновлюємо дату наступного платежу
                     update_subscription_next_payment(subscription_id, months)
+                    reset_payment_failures(subscription_id)
                     track_link_purchase(user_id)
 
                     ref_id = get_ref_id_by_user(user_id)
@@ -672,19 +713,18 @@ async def check_processing_payments():
                     """, (failure_reason, payment_db_id))
                     conn.commit()
                     
-                    increment_payment_failures(subscription_id)
-                    
                     token_data = get_user_token(user_id)
                     masked_card = token_data[2] if token_data else "**** **** **** ****"
                     card_token = token_data[1] if token_data else None
                     
-                    await notify_user_payment_failed(
+                    await handle_recurring_payment_failure(
+                        subscription_id=subscription_id,
                         user_id=user_id,
                         product_name=product_name,
                         masked_card=masked_card,
                         invoice_id=invoice_id,
                         card_token=card_token,
-                        failure_reason=failure_reason
+                        failure_reason=failure_reason,
                     )
                     
                 elif current_status == 'expired':
@@ -698,7 +738,12 @@ async def check_processing_payments():
                     """, (payment_db_id,))
                     conn.commit()
                     
-                    increment_payment_failures(subscription_id)
+                    await handle_recurring_payment_failure(
+                        subscription_id=subscription_id,
+                        user_id=user_id,
+                        product_name=product_name,
+                        failure_reason='Рахунок застарів',
+                    )
                     
                 # Якщо все ще processing - залишаємо як є, перевіримо пізніше
                 

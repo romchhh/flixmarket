@@ -521,8 +521,8 @@ def update_subscription_next_payment(subscription_id: int, months: int) -> bool:
         return False
 
 
-def increment_payment_failures(subscription_id: int) -> bool:
-    """Збільшує лічильник невдалих платежів"""
+def increment_payment_failures(subscription_id: int) -> int:
+    """Збільшує лічильник невдалих платежів. Повертає нове значення лічильника."""
     try:
         cursor.execute("""
             UPDATE recurring_subscriptions 
@@ -530,9 +530,47 @@ def increment_payment_failures(subscription_id: int) -> bool:
             WHERE id = ?
         """, (subscription_id,))
         conn.commit()
-        return True
+        cursor.execute(
+            "SELECT payment_failures FROM recurring_subscriptions WHERE id = ?",
+            (subscription_id,),
+        )
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
     except sqlite3.Error as e:
         print(f"Помилка при оновленні лічильника помилок: {e}")
+        return 0
+
+
+def postpone_subscription_retry(subscription_id: int, days: int = 1) -> bool:
+    """Відкладає наступну спробу автосписання на N днів (щоб не спамити картку)."""
+    try:
+        from datetime import datetime, timedelta
+
+        next_payment_date = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute("""
+            UPDATE recurring_subscriptions
+            SET next_payment_date = ?, updated_at = datetime('now')
+            WHERE id = ?
+        """, (next_payment_date, subscription_id))
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Помилка при відкладенні спроби платежу: {e}")
+        return False
+
+
+def reset_payment_failures(subscription_id: int) -> bool:
+    """Скидає лічильник невдалих платежів після успішної оплати."""
+    try:
+        cursor.execute("""
+            UPDATE recurring_subscriptions
+            SET payment_failures = 0, updated_at = datetime('now')
+            WHERE id = ?
+        """, (subscription_id,))
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Помилка при скиданні лічильника помилок: {e}")
         return False
 
 
