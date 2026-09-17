@@ -1,6 +1,6 @@
 from aiogram import Router, types, F
 from aiogram.types import FSInputFile, InputMediaPhoto, InlineKeyboardButton, InlineKeyboardMarkup
-from config import administrators, token as BOT_TOKEN, SITE_URL, admin_chat_id, MIN_WITHDRAWAL, CATALOG_IMAGE_PATH
+from config import administrators, token as BOT_TOKEN, SITE_URL, WEB_SITE_URL, admin_chat_id, MIN_WITHDRAWAL, CATALOG_IMAGE_PATH
 from main import bot, scheduler
 from aiogram.filters import Command, CommandObject
 from keyboards.client_keyboards import get_start_keyboard, get_socials_keyboard, get_manager_keyboard, get_catalog_keyboard, get_products_keyboard, get_product_info_keyboard, get_payment_keyboard, get_payment_choice_keyboard, get_profile_keyboard, get_back_to_profile_keyboard, get_referral_keyboard, get_contest_keyboard
@@ -17,15 +17,23 @@ from ulits.client_states import WithdrawPartner
 from aiogram.fsm.context import FSMContext
 from ulits.path_utils import resolve_media_path
 from html import escape
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 import hashlib
 import hmac
+import json
+import logging
 import time
 from database.links_db import create_table_links
+
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
 
 router = Router()
 
 payment_manager = PaymentManager()
+log = logging.getLogger(__name__)
 
 WEB_START_ORIGINS = {
     "w1": "http://localhost:3000",
@@ -36,18 +44,33 @@ WEB_START_ORIGINS = {
     "wS": None,
 }
 
+NGROK_PREFIXES = {
+    "n0": "https://{slug}.ngrok-free.dev",
+    "n1": "https://{slug}.ngrok-free.app",
+    "n2": "https://{slug}.ngrok.io",
+    "n3": "https://{slug}.ngrok.app",
+}
+
 
 def parse_web_start(raw: str):
     raw = (raw or "").strip()
+    if raw.startswith("/start"):
+        raw = raw.split(maxsplit=1)[1] if " " in raw else ""
+    raw = raw.strip()
     if not raw:
         return None, None
-    for prefix, origin in WEB_START_ORIGINS.items():
+    for prefix, tmpl in NGROK_PREFIXES.items():
+        if raw.startswith(prefix) and len(raw) > len(prefix) + 8:
+            rest = raw[len(prefix):]
+            for tlen in (16, 8):
+                token, slug = rest[:tlen], rest[tlen:]
+                if len(token) == tlen and slug and all(c in "0123456789abcdefABCDEF" for c in token):
+                    return token.lower(), tmpl.format(slug=slug)
+    for prefix, origin in sorted(WEB_START_ORIGINS.items(), key=lambda item: -len(item[0])):
         if raw.startswith(prefix) and len(raw) > len(prefix):
-            token = raw[len(prefix):]
-            resolved = origin or SITE_URL
-            return token, resolved
+            return raw[len(prefix):], origin
     if raw.startswith("w") and len(raw) >= 17:
-        return raw[1:], SITE_URL
+        return raw[1:], None
     return None, None
 
 
@@ -70,6 +93,71 @@ async def scheduler_jobs():
     scheduler.add_job(process_recurring_payments, "interval", hours=12)
 
 
+async def notify_site_login(origins, payload: dict):
+    if not aiohttp:
+        return
+    seen = set()
+    timeout = aiohttp.ClientTimeout(total=10)
+    headers = {
+        "Content-Type": "application/json",
+        "ngrok-skip-browser-warning": "1",
+        "User-Agent": "FlixMarketBot/web-login",
+    }
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for origin in origins:
+            origin = (origin or "").rstrip("/")
+            host = (urlparse(origin).hostname or "").lower() if origin else ""
+            if not origin or origin in seen or host in ("localhost", "127.0.0.1", "::1"):
+                continue
+            if not origin.startswith(("http://", "https://")):
+                continue
+            seen.add(origin)
+            try:
+                async with session.post(
+                    f"{origin}/api/auth/telegram/bot-confirm",
+                    data=json.dumps(payload),
+                    headers=headers,
+                ) as resp:
+                    await resp.read()
+            except Exception as e:
+                log.warning("site login notify %s: %s", origin, e)
+
+
+async def confirm_site_login(message: types.Message, token: str, origin: str | None):
+    user_id = message.from_user.id
+    username = message.from_user.username or str(user_id)
+    if not check_user(user_id):
+        add_user(user_id, message.from_user.username, None, None)
+    confirm_web_login(token, user_id, username, origin)
+    row = get_web_login(token)
+    origin = ((row or {}).get("origin") or origin or WEB_SITE_URL or SITE_URL or "").rstrip("/")
+    params = signed_site_login(user_id, message.from_user.username, token)
+    await notify_site_login(
+        [origin, (row or {}).get("origin"), WEB_SITE_URL, SITE_URL],
+        params,
+    )
+    link = f"{origin}/api/auth/telegram/callback?{urlencode(params)}" if origin else ""
+    text = "✅ Вхід на сайт підтверджено.\nМожеш повернутись на сайт — кабінет відкриється сам."
+    if origin.startswith("https://") and link:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Відкрити кабінет", url=link),
+        ]])
+        try:
+            await message.answer(text, reply_markup=kb)
+            return
+        except Exception:
+            pass
+    if link:
+        await message.answer(f"{text}\n\n{link}")
+    else:
+        await message.answer("✅ Вхід на сайт підтверджено. Повернись на сторінку логіну — кабінет відкриється сам.")
+
+
+@router.message(F.text.regexp(r"(?i)^(?:/start(?:@\w+)?\s+)?(?:n[0-3]|w[0-2NLS_])[A-Za-z0-9_-]{8,}$"))
+async def start_web_payload(message: types.Message):
+    token, origin = parse_web_start(message.text or "")
+    if token:
+        await confirm_site_login(message, token, origin)
 
 
 @router.message(Command("start"))
@@ -85,27 +173,7 @@ async def start(message: types.Message, command: CommandObject):
 
     token, origin = parse_web_start(raw)
     if token:
-        username = message.from_user.username or str(user_id)
-        if not check_user(user_id):
-            add_user(user_id, message.from_user.username, None, None)
-        confirm_web_login(token, user_id, username, origin)
-        row = get_web_login(token)
-        origin = ((row or {}).get("origin") or origin or SITE_URL or "").rstrip("/")
-        params = signed_site_login(user_id, message.from_user.username, token)
-        link = f"{origin}/api/auth/telegram/callback?{urlencode(params)}"
-        if origin.startswith("https://"):
-            kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Відкрити кабінет", url=link),
-            ]])
-            try:
-                await message.answer(
-                    "✅ Вхід на сайт підтверджено.\nНатисни кнопку — відкриється кабінет.",
-                    reply_markup=kb,
-                )
-            except Exception:
-                await message.answer(f"✅ Вхід на сайт підтверджено.\n\n{link}")
-        else:
-            await message.answer(f"✅ Вхід на сайт підтверджено.\n\nВідкрий кабінет:\n{link}")
+        await confirm_site_login(message, token, origin)
         return
 
     user_exists = check_user(user_id)

@@ -21,6 +21,7 @@ SITE_URL = (
     or os.getenv('MINIAPP_API_URL')
     or 'https://market.easyplayy.com'
 ).rstrip('/')
+WEB_SITE_URL = (os.getenv('WEB_SITE_URL') or SITE_URL).rstrip('/')
 WEB_APP_URL = SITE_URL
 MINIAPP_API_URL = SITE_URL
 BOT_USERNAME = os.getenv('BOT_USERNAME', 'FlixMarketBot')
