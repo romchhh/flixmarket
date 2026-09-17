@@ -139,10 +139,14 @@ def create_web_logins_table():
             username TEXT,
             created_at TEXT,
             confirmed_at TEXT,
-            expires_at TEXT
+            expires_at TEXT,
+            origin TEXT
         )
         """
     )
+    cols = {row[1] for row in cursor.execute("PRAGMA table_info(web_logins)").fetchall()}
+    if "origin" not in cols:
+        cursor.execute("ALTER TABLE web_logins ADD COLUMN origin TEXT")
     conn.commit()
 
 
@@ -150,42 +154,53 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def create_web_login_token():
+def create_web_login_token(origin=None):
     create_web_logins_table()
     token = secrets.token_hex(8)
     now = _utc_now()
     cursor.execute(
-        "INSERT INTO web_logins (token, created_at, expires_at) VALUES (?, ?, ?)",
+        "INSERT INTO web_logins (token, created_at, expires_at, origin) VALUES (?, ?, ?, ?)",
         (
             token,
             now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            (origin or "").rstrip("/"),
         ),
     )
     conn.commit()
     return token
 
 
-def confirm_web_login(token, telegram_id, username):
+def confirm_web_login(token, telegram_id, username, origin=None):
+    """Підтвердити вхід. Якщо токена ще немає в цій базі — створюємо (сайт і бот можуть бути на різних машинах)."""
+    token = (token or "").strip()
+    if not token or len(token) < 8:
+        return False
     create_web_logins_table()
-    cursor.execute(
-        "SELECT expires_at FROM web_logins WHERE token = ?",
-        (token,),
-    )
+    now = _utc_now()
+    now_s = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    expires = (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    name = (username or str(telegram_id)).lstrip("@")
+    origin = (origin or "").rstrip("/")
+    cursor.execute("SELECT token, origin FROM web_logins WHERE token = ?", (token,))
     row = cursor.fetchone()
-    if not row:
-        return False
-    if row[0] < _utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"):
-        return False
-    cursor.execute(
-        "UPDATE web_logins SET telegram_id = ?, username = ?, confirmed_at = ? WHERE token = ?",
-        (
-            telegram_id,
-            (username or str(telegram_id)).lstrip("@"),
-            _utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            token,
-        ),
-    )
+    if row:
+        cursor.execute(
+            """
+            UPDATE web_logins
+            SET telegram_id = ?, username = ?, confirmed_at = ?, origin = COALESCE(NULLIF(?, ''), origin)
+            WHERE token = ?
+            """,
+            (telegram_id, name, now_s, origin, token),
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO web_logins (token, telegram_id, username, created_at, confirmed_at, expires_at, origin)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (token, telegram_id, name, now_s, now_s, expires, origin),
+        )
     conn.commit()
     return True
 
@@ -193,7 +208,7 @@ def confirm_web_login(token, telegram_id, username):
 def get_web_login(token):
     create_web_logins_table()
     cursor.execute(
-        "SELECT token, telegram_id, username, confirmed_at, expires_at FROM web_logins WHERE token = ?",
+        "SELECT token, telegram_id, username, confirmed_at, expires_at, origin FROM web_logins WHERE token = ?",
         (token,),
     )
     row = cursor.fetchone()
@@ -205,6 +220,7 @@ def get_web_login(token):
         "username": row[2],
         "confirmedAt": row[3],
         "expiresAt": row[4],
+        "origin": row[5],
     }
 
 

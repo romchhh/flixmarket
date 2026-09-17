@@ -1,11 +1,11 @@
 from aiogram import Router, types, F
 from aiogram.types import FSInputFile, InputMediaPhoto, InlineKeyboardButton, InlineKeyboardMarkup
-from config import administrators
+from config import administrators, token as BOT_TOKEN, SITE_URL, admin_chat_id, MIN_WITHDRAWAL, CATALOG_IMAGE_PATH
 from main import bot, scheduler
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from keyboards.client_keyboards import get_start_keyboard, get_socials_keyboard, get_manager_keyboard, get_catalog_keyboard, get_products_keyboard, get_product_info_keyboard, get_payment_keyboard, get_payment_choice_keyboard, get_profile_keyboard, get_back_to_profile_keyboard, get_referral_keyboard, get_contest_keyboard
 from Content.texts import get_greeting_message, get_about_text, get_faq_text, get_manager_text, get_help_text, get_referral_text, get_contest_text, MENU_EMOJI_IDS, get_calendar_emoji_html, get_tv_emoji_html, get_person_emoji_html, get_premium_emoji, format_date, format_product_name_for_display
-from database.client_db import create_table, check_user, add_user, create_products_table, get_product_by_id, save_payment_info, create_payments_table, create_subscriptions_table, get_user_info, get_user_subscriptions, get_user_name, cursor, conn, create_contest_table, get_partner_balance, get_partner_referral_percent, get_partner_earnings_history, create_withdrawal_request, deduct_partner_balance, add_subscription, get_product_type, confirm_web_login
+from database.client_db import create_table, check_user, add_user, create_products_table, get_product_by_id, save_payment_info, create_payments_table, create_subscriptions_table, get_user_info, get_user_subscriptions, get_user_name, cursor, conn, create_contest_table, get_partner_balance, get_partner_referral_percent, get_partner_earnings_history, create_withdrawal_request, deduct_partner_balance, add_subscription, get_product_type, confirm_web_login, get_web_login
 from database.links_db import LINK_START_PREFIX, increment_link_count, link_exists
 from ulits.monopay_functions import PaymentManager, check_pending_payments
 import asyncio
@@ -15,14 +15,54 @@ from datetime import datetime
 from ulits.client_functions import get_profile_text, get_status_text
 from ulits.client_states import WithdrawPartner
 from aiogram.fsm.context import FSMContext
-from config import admin_chat_id, MIN_WITHDRAWAL, CATALOG_IMAGE_PATH
 from ulits.path_utils import resolve_media_path
 from html import escape
+from urllib.parse import urlencode
+import hashlib
+import hmac
+import time
 from database.links_db import create_table_links
 
 router = Router()
 
 payment_manager = PaymentManager()
+
+WEB_START_ORIGINS = {
+    "w1": "http://localhost:3000",
+    "w2": "http://127.0.0.1:3000",
+    "w0": None,
+    "w_": None,
+    "wL": "http://localhost:3000",
+    "wS": None,
+}
+
+
+def parse_web_start(raw: str):
+    raw = (raw or "").strip()
+    if not raw:
+        return None, None
+    for prefix, origin in WEB_START_ORIGINS.items():
+        if raw.startswith(prefix) and len(raw) > len(prefix):
+            token = raw[len(prefix):]
+            resolved = origin or SITE_URL
+            return token, resolved
+    if raw.startswith("w") and len(raw) >= 17:
+        return raw[1:], SITE_URL
+    return None, None
+
+
+def signed_site_login(telegram_id: int, username, login_token: str) -> dict:
+    data = {
+        "id": str(telegram_id),
+        "auth_date": str(int(time.time())),
+        "login_token": login_token,
+    }
+    if username:
+        data["username"] = username.lstrip("@")
+    dcs = "\n".join(f"{k}={data[k]}" for k in sorted(data))
+    secret = hashlib.sha256(BOT_TOKEN.encode()).digest()
+    data["hash"] = hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest()
+    return data
 
 async def scheduler_jobs():
     scheduler.add_job(check_pending_payments, "interval", minutes=0.5)
@@ -33,27 +73,39 @@ async def scheduler_jobs():
 
 
 @router.message(Command("start"))
-async def start(message: types.Message):
+async def start(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
 
     create_contest_table()
 
-    parts = message.text.split() if message.text else []
-    start_payload = parts[1] if len(parts) > 1 else None
-    if start_payload and start_payload.startswith("w_"):
+    raw = (command.args if command else None) or ""
+    if not raw and message.text:
+        parts = message.text.split(maxsplit=1)
+        raw = parts[1] if len(parts) > 1 else ""
+
+    token, origin = parse_web_start(raw)
+    if token:
         username = message.from_user.username or str(user_id)
         if not check_user(user_id):
             add_user(user_id, message.from_user.username, None, None)
-        if confirm_web_login(start_payload[2:], user_id, username):
-            await message.answer(
-                "✅ Вхід на сайт підтверджено.\nПовернись у браузер — кабінет уже відкриється.",
-                reply_markup=get_start_keyboard(user_id),
-            )
+        confirm_web_login(token, user_id, username, origin)
+        row = get_web_login(token)
+        origin = ((row or {}).get("origin") or origin or SITE_URL or "").rstrip("/")
+        params = signed_site_login(user_id, message.from_user.username, token)
+        link = f"{origin}/api/auth/telegram/callback?{urlencode(params)}"
+        if origin.startswith("https://"):
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Відкрити кабінет", url=link),
+            ]])
+            try:
+                await message.answer(
+                    "✅ Вхід на сайт підтверджено.\nНатисни кнопку — відкриється кабінет.",
+                    reply_markup=kb,
+                )
+            except Exception:
+                await message.answer(f"✅ Вхід на сайт підтверджено.\n\n{link}")
         else:
-            await message.answer(
-                "Посилання для входу недійсне або протухло. Натисни кнопку ще раз на сайті.",
-                reply_markup=get_start_keyboard(user_id),
-            )
+            await message.answer(f"✅ Вхід на сайт підтверджено.\n\nВідкрий кабінет:\n{link}")
         return
 
     user_exists = check_user(user_id)

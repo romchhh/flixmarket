@@ -181,12 +181,20 @@ async def health(_request):
     return _json({"ok": True, "service": "flixmarket-bot-api"})
 
 
-async def web_login_create(_request):
-    token = create_web_login_token()
+async def web_login_create(request):
+    origin = ""
+    if request.body_exists:
+        try:
+            body = await request.json()
+            origin = (body.get("origin") or "").rstrip("/")
+        except Exception:
+            origin = ""
+    token = create_web_login_token(origin)
     bot = (BOT_USERNAME or "FlixMarketBot").lstrip("@")
     return _json({
         "token": token,
-        "botUrl": f"https://t.me/{bot}?start=w_{token}",
+        "botUrl": f"https://t.me/{bot}?start=w0{token}",
+        "origin": origin,
     })
 
 
