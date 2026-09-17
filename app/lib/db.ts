@@ -38,7 +38,14 @@ function ensureProductBadgeColumn(database: SqliteDb) {
 
 export function getDb(): SqliteDb {
   if (!db) {
-    db = new Database(getDbPath(), { readonly: false });
+    db = new Database(getDbPath(), { readonly: false, timeout: 5000 });
+    try {
+      db.prepare("PRAGMA journal_mode=WAL").get();
+      db.prepare("PRAGMA busy_timeout=5000").run();
+      db.prepare("PRAGMA foreign_keys=ON").run();
+    } catch {
+      // ignore
+    }
     ensureCatalogImagesTable(db);
     ensureProductBadgeColumn(db);
   }

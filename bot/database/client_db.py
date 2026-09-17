@@ -1,3 +1,4 @@
+import secrets
 import sqlite3
 from datetime import datetime, timezone, timedelta
 import pytz
@@ -127,6 +128,84 @@ def enable_wal():
         conn.commit()
     except sqlite3.Error as e:
         print(f"Помилка WAL: {e}")
+
+
+def create_web_logins_table():
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS web_logins (
+            token TEXT PRIMARY KEY,
+            telegram_id INTEGER,
+            username TEXT,
+            created_at TEXT,
+            confirmed_at TEXT,
+            expires_at TEXT
+        )
+        """
+    )
+    conn.commit()
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def create_web_login_token():
+    create_web_logins_table()
+    token = secrets.token_hex(8)
+    now = _utc_now()
+    cursor.execute(
+        "INSERT INTO web_logins (token, created_at, expires_at) VALUES (?, ?, ?)",
+        (
+            token,
+            now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        ),
+    )
+    conn.commit()
+    return token
+
+
+def confirm_web_login(token, telegram_id, username):
+    create_web_logins_table()
+    cursor.execute(
+        "SELECT expires_at FROM web_logins WHERE token = ?",
+        (token,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return False
+    if row[0] < _utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"):
+        return False
+    cursor.execute(
+        "UPDATE web_logins SET telegram_id = ?, username = ?, confirmed_at = ? WHERE token = ?",
+        (
+            telegram_id,
+            (username or str(telegram_id)).lstrip("@"),
+            _utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            token,
+        ),
+    )
+    conn.commit()
+    return True
+
+
+def get_web_login(token):
+    create_web_logins_table()
+    cursor.execute(
+        "SELECT token, telegram_id, username, confirmed_at, expires_at FROM web_logins WHERE token = ?",
+        (token,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "token": row[0],
+        "telegramId": row[1],
+        "username": row[2],
+        "confirmedAt": row[3],
+        "expiresAt": row[4],
+    }
 
 
 def get_marketing_link_id_by_user(user_id: int):
@@ -1397,6 +1476,7 @@ def create_tables():
     migrate_users_marketing_link()
     migrate_users_site_fields()
     migrate_payments_source()
+    create_web_logins_table()
     enable_wal()
     from database.links_db import create_table_links
     create_table_links()

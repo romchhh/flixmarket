@@ -9,12 +9,13 @@ from datetime import datetime, timedelta
 
 from aiohttp import web
 
-from config import API_HOST, API_KEY, API_PORT, BOT_DIR, PUBLIC_API_URL, SITE_URL
+from config import API_HOST, API_KEY, API_PORT, BOT_DIR, BOT_USERNAME, PUBLIC_API_URL, SITE_URL
 from database.admin_db import get_admin_subscriptions_stats, get_all_categories, get_category_image
 from database.client_db import (
     add_user,
     check_user,
     create_site_user,
+    create_web_login_token,
     deactivate_subscription,
     get_all_products,
     get_full_payment,
@@ -25,6 +26,7 @@ from database.client_db import (
     get_user_recurring_subscriptions,
     get_user_row,
     get_user_subscriptions,
+    get_web_login,
     list_recent_payments,
     list_users,
     merge_site_user_to_telegram,
@@ -177,6 +179,32 @@ def _sub_payload(user_id: int) -> dict:
 
 async def health(_request):
     return _json({"ok": True, "service": "flixmarket-bot-api"})
+
+
+async def web_login_create(_request):
+    token = create_web_login_token()
+    bot = (BOT_USERNAME or "FlixMarketBot").lstrip("@")
+    return _json({
+        "token": token,
+        "botUrl": f"https://t.me/{bot}?start=w_{token}",
+    })
+
+
+async def web_login_get(request):
+    token = request.match_info["token"]
+    row = get_web_login(token)
+    if not row:
+        return _json({"error": "not found"}, 404)
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    if row.get("confirmedAt") and row.get("telegramId"):
+        return _json({
+            "status": "confirmed",
+            "telegramId": row["telegramId"],
+            "username": row["username"],
+        })
+    if row.get("expiresAt") and row["expiresAt"] < now:
+        return _json({"status": "expired"})
+    return _json({"status": "pending"})
 
 
 async def catalog_list(_request):
@@ -442,6 +470,9 @@ def build_app() -> web.Application:
     app.router.add_get("/api/v1/products/{id}", product_get)
     app.router.add_get("/api/v1/media/product/{id}", media_product)
     app.router.add_get("/api/v1/media/category/{id}", media_category)
+
+    app.router.add_post("/api/v1/web-login", web_login_create)
+    app.router.add_get("/api/v1/web-login/{token}", web_login_get)
 
     app.router.add_post("/api/v1/users", users_create)
     app.router.add_get("/api/v1/users/{user_id}", users_get)
