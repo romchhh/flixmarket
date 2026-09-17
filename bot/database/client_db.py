@@ -60,6 +60,10 @@ def migrate_products_table():
             print("Поле payment_type успішно додано до таблиці products")
         else:
             print("Поле payment_type вже існує в таблиці products")
+        if 'product_badge' not in columns:
+            cursor.execute("ALTER TABLE products ADD COLUMN product_badge TEXT")
+            conn.commit()
+            print("Поле product_badge успішно додано до таблиці products")
     except sqlite3.Error as e:
         print(f"Помилка при міграції таблиці products: {e}")
 
@@ -93,6 +97,36 @@ def migrate_users_marketing_link():
     if "marketing_link_id" not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN marketing_link_id INTEGER")
         conn.commit()
+
+
+def migrate_users_site_fields():
+    """Поля для користувачів із сайту: email і джерело реєстрації."""
+    cursor.execute("PRAGMA table_info(users)")
+    columns = {column[1] for column in cursor.fetchall()}
+    if "email" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN email TEXT")
+        conn.commit()
+    if "source" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN source TEXT DEFAULT 'telegram'")
+        conn.commit()
+
+
+def migrate_payments_source():
+    """Звідки створено платіж: bot | site."""
+    cursor.execute("PRAGMA table_info(payments)")
+    columns = {column[1] for column in cursor.fetchall()}
+    if "source" not in columns:
+        cursor.execute("ALTER TABLE payments ADD COLUMN source TEXT DEFAULT 'bot'")
+        conn.commit()
+
+
+def enable_wal():
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"Помилка WAL: {e}")
 
 
 def get_marketing_link_id_by_user(user_id: int):
@@ -140,6 +174,55 @@ def get_product_types():
     ''')
     return cursor.fetchall()
 
+
+def get_product_types_full():
+    """Категорії з кількістю товарів і фото з catalog_images (як у мініапці)."""
+    try:
+        cursor.execute("""
+            SELECT p.catalog_id, p.product_type, COUNT(*) as count, c.image_path
+            FROM products p
+            LEFT JOIN catalog_images c ON p.catalog_id = c.catalog_id
+            GROUP BY p.catalog_id, p.product_type
+            ORDER BY p.catalog_id
+        """)
+        return [
+            {
+                "catalog_id": row[0],
+                "product_type": row[1],
+                "count": row[2],
+                "image_path": row[3],
+            }
+            for row in cursor.fetchall()
+        ]
+    except sqlite3.Error as e:
+        print(f"Помилка get_product_types_full: {e}")
+        return [
+            {
+                "catalog_id": cid,
+                "product_type": name,
+                "count": count,
+                "image_path": None,
+            }
+            for cid, name, count in get_product_types()
+        ]
+
+
+def _product_from_row(row, cols=None):
+    if cols is None:
+        cols = [d[0] for d in cursor.description]
+    data = dict(zip(cols, row))
+    return {
+        "id": data.get("id"),
+        "catalog_id": data.get("catalog_id"),
+        "product_type": data.get("product_type"),
+        "product_name": data.get("product_name"),
+        "product_description": data.get("product_description"),
+        "product_price": data.get("product_price"),
+        "product_photo": data.get("product_photo"),
+        "payment_type": data.get("payment_type") or "one",
+        "product_badge": data.get("product_badge") or "",
+    }
+
 def get_products_by_catalog(catalog_id: int):
     cursor.execute('''
         SELECT id, product_name, product_price
@@ -160,6 +243,28 @@ def get_product_by_id(product_id: int):
         print(f"Помилка при отриманні продукту: {e}")
         return None
 
+
+def get_product_full(product_id: int):
+    try:
+        cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return _product_from_row(row)
+    except sqlite3.Error as e:
+        print(f"Помилка get_product_full: {e}")
+        return None
+
+
+def get_all_products():
+    try:
+        cursor.execute("SELECT * FROM products ORDER BY catalog_id, id")
+        cols = [d[0] for d in cursor.description]
+        return [_product_from_row(row, cols) for row in cursor.fetchall()]
+    except sqlite3.Error as e:
+        print(f"Помилка get_all_products: {e}")
+        return []
+
 def create_payments_table():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS payments (
@@ -177,18 +282,44 @@ def create_payments_table():
     ''')
     conn.commit()
 
-def save_payment_info(payment_id: str, invoice_id: str, user_id: int, product_id: int, months: int, amount: float, status: str, payment_type: str = 'one_time') -> bool:
+def save_payment_info(payment_id: str, invoice_id: str, user_id: int, product_id: int, months: int, amount: float, status: str, payment_type: str = 'one_time', source: str = 'bot') -> bool:
     try:
         cursor.execute("""
             INSERT INTO payments (
-                payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-        """, (payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type))
+                payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, source, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        """, (payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, source))
         conn.commit()
         return True
     except sqlite3.Error as e:
         print(f"Помилка при збереженні платежу: {e}")
         return False
+
+
+def get_full_payment(invoice_id: str):
+    try:
+        cursor.execute("""
+            SELECT payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, source
+            FROM payments
+            WHERE invoice_id = ? OR payment_id = ?
+        """, (invoice_id, invoice_id))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "payment_id": row[0],
+            "invoice_id": row[1],
+            "user_id": row[2],
+            "product_id": row[3],
+            "months": row[4],
+            "amount": row[5],
+            "status": row[6],
+            "payment_type": row[7],
+            "source": row[8] if len(row) > 8 else "bot",
+        }
+    except sqlite3.Error as e:
+        print(f"Помилка get_full_payment: {e}")
+        return None
 
 def get_payment_info(invoice_id: str) -> tuple:
     try:
@@ -381,10 +512,133 @@ def get_user_info(user_id: int) -> dict:
         print(f"Помилка при отриманні інформації користувача: {e}")
         return None
 
+def get_user_by_email(email: str):
+    cursor.execute("SELECT user_id, user_name, email, source FROM users WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {"user_id": row[0], "user_name": row[1], "email": row[2], "source": row[3]}
+
+
+def get_user_row(user_id: int):
+    try:
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cursor.description]
+        data = dict(zip(cols, row))
+        return {
+            "user_id": data.get("user_id"),
+            "user_name": data.get("user_name"),
+            "ref_id": data.get("ref_id"),
+            "join_date": data.get("join_date"),
+            "discounts": data.get("discounts"),
+            "email": data.get("email"),
+            "source": data.get("source") or "telegram",
+            "partner_balance": data.get("partner_balance") or 0,
+        }
+    except sqlite3.Error as e:
+        print(f"Помилка get_user_row: {e}")
+        return None
+
+
+def create_site_user(email: str, username: str | None = None) -> int:
+    """Створює користувача сайту з від'ємним user_id (не Telegram)."""
+    existing = get_user_by_email(email)
+    if existing:
+        return int(existing["user_id"])
+    cursor.execute("SELECT MIN(user_id) FROM users")
+    min_id = cursor.fetchone()[0]
+    new_id = -1 if min_id is None or min_id > 0 else int(min_id) - 1
+    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute(
+        """
+        INSERT INTO users (user_id, user_name, ref_id, join_date, email, source)
+        VALUES (?, ?, ?, ?, ?, 'site')
+        """,
+        (new_id, username or email, None, current_date, email),
+    )
+    conn.commit()
+    return new_id
+
+
+def set_user_email(user_id: int, email: str) -> bool:
+    try:
+        cursor.execute("UPDATE users SET email = ? WHERE user_id = ?", (email, user_id))
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Помилка set_user_email: {e}")
+        return False
+
+
+def _reassign_user_id(from_id: int, to_id: int):
+    tables = [
+        ("subscriptions", "user_id"),
+        ("payments", "user_id"),
+        ("recurring_subscriptions", "user_id"),
+        ("subscription_payments", "user_id"),
+        ("contest", "user_id"),
+        ("contest", "invite_id"),
+        ("partner_earnings", "partner_id"),
+        ("partner_earnings", "buyer_id"),
+        ("partner_withdrawal_requests", "user_id"),
+        ("users", "ref_id"),
+    ]
+    cursor.execute("DELETE FROM user_tokens WHERE user_id = ?", (from_id,))
+    for table, col in tables:
+        try:
+            cursor.execute(f"UPDATE {table} SET {col} = ? WHERE {col} = ?", (to_id, from_id))
+        except sqlite3.Error as e:
+            print(f"merge skip {table}.{col}: {e}")
+
+
+def merge_site_user_to_telegram(site_user_id: int, telegram_id: int, username: str | None = None) -> int:
+    """Прив'язує акаунт сайту до Telegram і переносить підписки/платежі."""
+    if site_user_id == telegram_id:
+        if username:
+            cursor.execute("UPDATE users SET user_name = ? WHERE user_id = ?", (username, telegram_id))
+            conn.commit()
+        return telegram_id
+
+    tg = check_user(telegram_id)
+    site = get_user_row(site_user_id)
+
+    if not tg:
+        if site:
+            _reassign_user_id(site_user_id, telegram_id)
+            cursor.execute(
+                """
+                UPDATE users
+                SET user_id = ?, user_name = COALESCE(?, user_name), source = 'telegram'
+                WHERE user_id = ?
+                """,
+                (telegram_id, username, site_user_id),
+            )
+            conn.commit()
+        else:
+            add_user(telegram_id, username, None)
+        return telegram_id
+
+    if site and site_user_id != telegram_id:
+        if site.get("email"):
+            set_user_email(telegram_id, site["email"])
+        _reassign_user_id(site_user_id, telegram_id)
+        cursor.execute("DELETE FROM users WHERE user_id = ?", (site_user_id,))
+        if username:
+            cursor.execute("UPDATE users SET user_name = ? WHERE user_id = ?", (username, telegram_id))
+        conn.commit()
+    elif username:
+        cursor.execute("UPDATE users SET user_name = ? WHERE user_id = ?", (username, telegram_id))
+        conn.commit()
+    return telegram_id
+
+
 def get_user_subscriptions(user_id: int) -> list:
     try:
         cursor.execute("""
-            SELECT product_name, price, start_date, end_date, status
+            SELECT id, product_name, product_id, price, start_date, end_date, status
             FROM subscriptions 
             WHERE user_id = ?
             ORDER BY end_date DESC
@@ -393,11 +647,13 @@ def get_user_subscriptions(user_id: int) -> list:
         subscriptions = []
         for row in cursor.fetchall():
             subscriptions.append({
-                'product_name': row[0],
-                'price': row[1],
-                'start_date': row[2],
-                'end_date': row[3],
-                'status': row[4]
+                'id': row[0],
+                'product_name': row[1],
+                'product_id': row[2],
+                'price': row[3],
+                'start_date': row[4],
+                'end_date': row[5],
+                'status': row[6]
             })
         return subscriptions
         
@@ -604,6 +860,135 @@ def save_subscription_payment(subscription_id: int, user_id: int, amount: float,
     except sqlite3.Error as e:
         print(f"Помилка при збереженні платежу підписки: {e}")
         return False
+
+
+def get_recurring_subscription(subscription_id: int, user_id: int | None = None):
+    try:
+        if user_id is None:
+            cursor.execute(
+                """
+                SELECT id, user_id, product_id, product_name, months, price, wallet_id,
+                       next_payment_date, status, payment_failures
+                FROM recurring_subscriptions WHERE id = ?
+                """,
+                (subscription_id,),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, user_id, product_id, product_name, months, price, wallet_id,
+                       next_payment_date, status, payment_failures
+                FROM recurring_subscriptions WHERE id = ? AND user_id = ?
+                """,
+                (subscription_id, user_id),
+            )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "product_id": row[2],
+            "product_name": row[3],
+            "months": row[4],
+            "price": row[5],
+            "wallet_id": row[6],
+            "next_payment_date": row[7],
+            "status": row[8],
+            "payment_failures": row[9],
+        }
+    except sqlite3.Error as e:
+        print(f"Помилка get_recurring_subscription: {e}")
+        return None
+
+
+def get_user_payments(user_id: int, limit: int = 50) -> list:
+    try:
+        cursor.execute(
+            """
+            SELECT payment_id, invoice_id, product_id, months, amount, status, payment_type, source, created_at
+            FROM payments WHERE user_id = ?
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (user_id, limit),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "payment_id": r[0],
+                "invoice_id": r[1],
+                "product_id": r[2],
+                "months": r[3],
+                "amount": r[4],
+                "status": r[5],
+                "payment_type": r[6],
+                "source": r[7],
+                "created_at": r[8],
+            }
+            for r in rows
+        ]
+    except sqlite3.Error as e:
+        print(f"Помилка get_user_payments: {e}")
+        return []
+
+
+def list_recent_payments(limit: int = 100) -> list:
+    try:
+        cursor.execute(
+            """
+            SELECT payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, source, created_at
+            FROM payments
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "payment_id": r[0],
+                "invoice_id": r[1],
+                "user_id": r[2],
+                "product_id": r[3],
+                "months": r[4],
+                "amount": r[5],
+                "status": r[6],
+                "payment_type": r[7],
+                "source": r[8],
+                "created_at": r[9],
+            }
+            for r in rows
+        ]
+    except sqlite3.Error as e:
+        print(f"Помилка list_recent_payments: {e}")
+        return []
+
+
+def list_users(limit: int = 100, offset: int = 0) -> list:
+    try:
+        cursor.execute(
+            """
+            SELECT user_id, user_name, email, source, join_date, partner_balance
+            FROM users
+            ORDER BY join_date DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "user_id": r[0],
+                "user_name": r[1],
+                "email": r[2],
+                "source": r[3],
+                "join_date": r[4],
+                "partner_balance": r[5],
+            }
+            for r in rows
+        ]
+    except sqlite3.Error as e:
+        print(f"Помилка list_users: {e}")
+        return []
 
 
 def get_user_recurring_subscriptions(user_id: int) -> list:
@@ -1010,5 +1395,8 @@ def create_tables():
     create_partner_withdrawal_requests_table()
     migrate_partner_withdrawal_payout_details()
     migrate_users_marketing_link()
+    migrate_users_site_fields()
+    migrate_payments_source()
+    enable_wal()
     from database.links_db import create_table_links
     create_table_links()

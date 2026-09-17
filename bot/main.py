@@ -38,6 +38,9 @@ async def main():
 
     create_tables()
 
+    from api.server import start_http_api
+    asyncio.create_task(start_http_api())
+
 
     while True:
         try:

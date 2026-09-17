@@ -7,7 +7,7 @@ const MONO_HOST = "https://api.monobank.ua/";
 const XTOKEN = process.env.XTOKEN ?? "";
 
 function getRedirectUrl(): string {
-  const webApp = process.env.WEB_APP_URL?.trim();
+  const webApp = process.env.SITE_URL?.trim() || process.env.WEB_APP_URL?.trim();
   const bot = process.env.BOT_LINK_FOR_REDIRECT?.trim();
   if (webApp) return webApp;
   if (bot) return bot;

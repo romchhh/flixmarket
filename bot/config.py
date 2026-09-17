@@ -14,8 +14,22 @@ _admin_chat_id_raw = (os.getenv('ADMIN_CHAT_ID') or '').strip()
 admin_chat_id = int(_admin_chat_id_raw) if _admin_chat_id_raw else 0
 XTOKEN = os.getenv('XTOKEN', '')
 MIN_WITHDRAWAL = int(os.getenv('MIN_WITHDRAWAL', '200'))
-# URL міні-додатку (каталог у браузері) для кнопки в головному меню
-WEB_APP_URL = os.getenv('WEB_APP_URL', '').rstrip('/')
+# Публічний URL мініапки / сайту: кнопка в боті, CORS, каталог по API
+SITE_URL = (
+    os.getenv('SITE_URL')
+    or os.getenv('WEB_APP_URL')
+    or os.getenv('MINIAPP_API_URL')
+    or 'https://market.easyplayy.com'
+).rstrip('/')
+WEB_APP_URL = SITE_URL
+MINIAPP_API_URL = SITE_URL
+BOT_USERNAME = os.getenv('BOT_USERNAME', 'FlixMarketBot')
+
+# Публічне API бота (сайт і мініапка ходять сюди з X-API-Key)
+API_HOST = os.getenv('API_HOST', '0.0.0.0')
+API_PORT = int(os.getenv('API_PORT', '8088'))
+API_KEY = os.getenv('API_KEY', '')
+PUBLIC_API_URL = os.getenv('PUBLIC_API_URL', '').rstrip('/')
 
 # Абсолютний шлях до зображення каталогу (щоб sendPhoto працював незалежно від cwd)
 BOT_DIR = os.path.dirname(os.path.abspath(__file__))

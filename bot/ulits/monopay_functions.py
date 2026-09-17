@@ -37,12 +37,24 @@ import sqlite3
 import uuid
 
 
+def default_redirect_url() -> str:
+    from config import BOT_USERNAME
+    return f"https://t.me/{BOT_USERNAME or 'FlixMarketBot'}"
+
+
+def default_webhook_url() -> str | None:
+    from config import PUBLIC_API_URL
+    if not PUBLIC_API_URL:
+        return None
+    return f"{PUBLIC_API_URL.rstrip('/')}/api/v1/webhooks/mono"
+
+
 class PaymentManager:
     def __init__(self):
         self.token = XTOKEN  # Заміни на реальний токен
         self.host = "https://api.monobank.ua/"
 
-    def create_payment(self, user_id: int, product_name: str, months: int, price: float) -> tuple[str, str, str]:
+    def create_payment(self, user_id: int, product_name: str, months: int, price: float, redirect_url: str | None = None) -> tuple[str, str, str]:
         local_payment_id = f"order_{user_id}_{int(datetime.now().timestamp())}"
         
         # Додаємо merchantPaymInfo з інформацією про товар
@@ -52,7 +64,7 @@ class PaymentManager:
             "description": f"Оплата {product_name} на {months} міс.",
             "orderReference": local_payment_id,
             "destination": "Оплата через Telegram-бот",
-            "redirectUrl": "https://t.me/FlixMarketBot",
+            "redirectUrl": redirect_url or default_redirect_url(),
             "merchantPaymInfo": {
                 "basketOrder": [
                     {
@@ -65,6 +77,9 @@ class PaymentManager:
                 ]
             }
         }
+        webhook = default_webhook_url()
+        if webhook:
+            payload["webHookUrl"] = webhook
         
         headers = {"X-Token": self.token, "Content-Type": "application/json"}
         response = requests.post(f"{self.host}api/merchant/invoice/create", json=payload, headers=headers)
@@ -77,7 +92,7 @@ class PaymentManager:
         else:
             raise Exception(f"Помилка створення платежу: {response.text}")
 
-    def create_payment_with_tokenization(self, user_id: int, product_name: str, months: int, price: float) -> tuple[str, str, str, str]:
+    def create_payment_with_tokenization(self, user_id: int, product_name: str, months: int, price: float, redirect_url: str | None = None) -> tuple[str, str, str, str]:
         """Створює платіж з токенізацією картки для підписки"""
         local_payment_id = f"subscription_{user_id}_{int(datetime.now().timestamp())}"
         wallet_id = f"wallet_{user_id}_{uuid.uuid4().hex[:8]}"
@@ -109,8 +124,7 @@ class PaymentManager:
                     }
                 ]
             },
-            "redirectUrl": "https://t.me/FlixMarketBot",
-            "webHookUrl": f"https://your-webhook-url.com/mono/webhook/{local_payment_id}",
+            "redirectUrl": redirect_url or default_redirect_url(),
             "validity": 3600,  # 1 година
             "paymentType": "debit",
             "saveCardData": {
@@ -118,6 +132,9 @@ class PaymentManager:
                 "walletId": wallet_id
             }
         }
+        webhook = default_webhook_url()
+        if webhook:
+            payload["webHookUrl"] = webhook
         
         headers = {"X-Token": self.token, "Content-Type": "application/json"}
         logging.info(f"Створення платежу з токенізацією. Payload: {json.dumps(payload, indent=2, ensure_ascii=False)}")
@@ -146,8 +163,7 @@ class PaymentManager:
             "cardToken": card_token,
             "amount": int(price * 100),
             "ccy": 980,
-            "redirectUrl": "https://t.me/FlixMarketBot",
-            "webHookUrl": f"https://your-webhook-url.com/mono/webhook/{local_payment_id}",
+            "redirectUrl": default_redirect_url(),
             "initiationKind": "merchant",  # merchant - автоматичне списання
             "merchantPaymInfo": {
                 "reference": local_payment_id,
@@ -175,6 +191,9 @@ class PaymentManager:
             },
             "paymentType": "debit"
         }
+        webhook = default_webhook_url()
+        if webhook:
+            payload["webHookUrl"] = webhook
         
         headers = {"X-Token": self.token, "Content-Type": "application/json"}
         logging.info(f"Створення токен-платежу. Payload: {json.dumps(payload, indent=2, ensure_ascii=False)}")
@@ -534,5 +553,18 @@ async def check_pending_payments():
             logging.error(f"Помилка при перевірці платежу {invoice_id}: {str(e)}", exc_info=True)
     
     logging.info("Завершення перевірки платежів")
+
+
+async def process_invoice_by_id(invoice_id: str):
+    """Миттєво перевіряє конкретний інвойс (вебхук сайту/Monobank)."""
+    from database.client_db import get_full_payment
+    info = get_full_payment(invoice_id)
+    if not info:
+        logging.info(f"process_invoice_by_id: {invoice_id} не знайдено")
+        return False
+    if info.get("status") != "pending":
+        return True
+    await check_pending_payments()
+    return True
 
 

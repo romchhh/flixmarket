@@ -38,6 +38,14 @@ cp .env.example .env
 
 Обидва сервіси читають з `FlixMarketBot/.env` (бот — через python-dotenv, апка — через dotenv у next.config).
 
+## Публічне API (для сайту)
+
+Разом із ботом стартує HTTP API на `API_HOST:API_PORT` (типово `:8088`).
+Сайт `flixmarket-code-site` ходить туди: каталог, створення оплати, підписки, скасування автосписання.
+Документація маршрутів: `bot/api/README.md`.
+
+У `.env` потрібні `API_KEY`, за бажанням `PUBLIC_API_URL` (вебхук Monobank) і `SITE_URL`.
+
 ## Запуск бота
 
 ```bash
