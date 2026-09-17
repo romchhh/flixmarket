@@ -17,3 +17,9 @@ app/.env.local
 # Локальна БД (не комітити)
 database/*.db
 database/*.db-journal
+database/*.db-shm
+database/*.db-wal
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
