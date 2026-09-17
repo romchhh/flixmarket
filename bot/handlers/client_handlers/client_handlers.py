@@ -5,7 +5,7 @@ from main import bot, scheduler
 from aiogram.filters import Command, CommandObject
 from keyboards.client_keyboards import get_start_keyboard, get_socials_keyboard, get_manager_keyboard, get_catalog_keyboard, get_products_keyboard, get_product_info_keyboard, get_payment_keyboard, get_payment_choice_keyboard, get_profile_keyboard, get_back_to_profile_keyboard, get_referral_keyboard, get_contest_keyboard
 from Content.texts import get_greeting_message, get_about_text, get_faq_text, get_manager_text, get_help_text, get_referral_text, get_contest_text, MENU_EMOJI_IDS, get_calendar_emoji_html, get_tv_emoji_html, get_person_emoji_html, get_premium_emoji, format_date, format_product_name_for_display
-from database.client_db import create_table, check_user, add_user, create_products_table, get_product_by_id, save_payment_info, create_payments_table, create_subscriptions_table, get_user_info, get_user_subscriptions, get_user_name, cursor, conn, create_contest_table, get_partner_balance, get_partner_referral_percent, get_partner_earnings_history, create_withdrawal_request, deduct_partner_balance, add_subscription, get_product_type, confirm_web_login, get_web_login
+from database.client_db import create_table, check_user, add_user, create_products_table, get_product_by_id, save_payment_info, create_payments_table, create_subscriptions_table, get_user_info, get_user_subscriptions, get_user_recurring_subscriptions, get_user_name, cursor, conn, create_contest_table, get_partner_balance, get_partner_referral_percent, get_partner_earnings_history, create_withdrawal_request, deduct_partner_balance, add_subscription, get_product_type, confirm_web_login, get_web_login
 from database.links_db import LINK_START_PREFIX, increment_link_count, link_exists
 from ulits.monopay_functions import PaymentManager, check_pending_payments
 import asyncio
@@ -87,6 +87,74 @@ def signed_site_login(telegram_id: int, username, login_token: str) -> dict:
     data["hash"] = hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest()
     return data
 
+
+def _iso_day(value: str, hour: str = "00:00:00") -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if "T" in raw or raw.endswith("Z"):
+        return raw if raw.endswith("Z") else raw + "Z"
+    try:
+        if " " in raw:
+            dt = datetime.strptime(raw[:19], "%Y-%m-%d %H:%M:%S")
+        else:
+            dt = datetime.strptime(raw[:10], "%Y-%m-%d")
+        return dt.strftime(f"%Y-%m-%dT{hour}Z") if hour != "keep" else dt.isoformat() + "Z"
+    except ValueError:
+        return raw
+
+
+def site_login_subscriptions(user_id: int) -> dict:
+    today = datetime.now().date()
+    one_time = []
+    for sub in get_user_subscriptions(user_id):
+        end = sub.get("end_date") or ""
+        status = (sub.get("status") or "active").lower()
+        try:
+            if end and datetime.strptime(str(end)[:10], "%Y-%m-%d").date() < today:
+                status = "expired"
+        except ValueError:
+            pass
+        one_time.append({
+            "id": f"one-{sub.get('id')}",
+            "botId": sub.get("id"),
+            "kind": "one_time",
+            "productId": str(sub.get("product_id") or ""),
+            "name": sub.get("product_name"),
+            "price": sub.get("price"),
+            "startsAt": _iso_day(str(sub.get("start_date") or "")),
+            "expiresAt": _iso_day(str(end), "23:59:59"),
+            "status": status,
+            "source": "bot",
+            "slug": "",
+            "icon": "",
+            "color": "#2B5CF6",
+        })
+    recurring = []
+    for row in get_user_recurring_subscriptions(user_id):
+        sub_id, product_name, months, price, next_payment_date, status, payment_failures = row
+        status = (status or "active").lower()
+        nxt = _iso_day(str(next_payment_date or ""), "keep")
+        recurring.append({
+            "id": f"rec-{sub_id}",
+            "botId": sub_id,
+            "kind": "recurring",
+            "productId": "",
+            "name": product_name,
+            "price": price,
+            "months": months,
+            "startsAt": nxt,
+            "expiresAt": nxt,
+            "nextPaymentAt": nxt,
+            "status": status,
+            "paymentFailures": payment_failures,
+            "source": "bot",
+            "slug": "",
+            "icon": "",
+            "color": "#2B5CF6",
+        })
+    return {"oneTime": one_time, "recurring": recurring}
+
 async def scheduler_jobs():
     scheduler.add_job(check_pending_payments, "interval", minutes=0.5)
     scheduler.add_job(check_expiring_subscriptions, "cron", hour=16, minute=0)
@@ -115,7 +183,7 @@ async def notify_site_login(origins, payload: dict):
             try:
                 async with session.post(
                     f"{origin}/api/auth/telegram/bot-confirm",
-                    data=json.dumps(payload),
+                    data=json.dumps(payload, default=str),
                     headers=headers,
                 ) as resp:
                     await resp.read()
@@ -132,9 +200,11 @@ async def confirm_site_login(message: types.Message, token: str, origin: str | N
     row = get_web_login(token)
     origin = ((row or {}).get("origin") or origin or WEB_SITE_URL or SITE_URL or "").rstrip("/")
     params = signed_site_login(user_id, message.from_user.username, token)
+    payload = dict(params)
+    payload["subscriptions"] = site_login_subscriptions(user_id)
     await notify_site_login(
         [origin, (row or {}).get("origin"), WEB_SITE_URL, SITE_URL],
-        params,
+        payload,
     )
     link = f"{origin}/api/auth/telegram/callback?{urlencode(params)}" if origin else ""
     text = "✅ Вхід на сайт підтверджено.\nМожеш повернутись на сайт — кабінет відкриється сам."
