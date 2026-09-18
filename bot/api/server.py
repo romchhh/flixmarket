@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 from aiohttp import web
 
-from config import API_HOST, API_KEY, API_PORT, BOT_DIR, BOT_USERNAME, PUBLIC_API_URL, SITE_URL
+from config import API_HOST, API_KEY, API_PORT, BOT_DIR, BOT_USERNAME, PUBLIC_API_URL, SITE_URL, WEB_SITE_URL
 from database.admin_db import get_admin_subscriptions_stats, get_all_categories, get_category_image
 from database.client_db import (
     add_user,
@@ -32,7 +32,7 @@ from database.client_db import (
     merge_site_user_to_telegram,
     set_user_email,
 )
-from ulits.payment_create import create_invoice_for_user
+from ulits.payment_create import create_invoice_for_user, record_invoice_for_user
 from ulits.path_utils import resolve_media_path
 
 from .catalog import serialize_category, serialize_product, slug_for
@@ -44,9 +44,14 @@ ALLOWED_ORIGINS = {
     "http://127.0.0.1:3000",
     "http://localhost:3001",
     "http://127.0.0.1:3001",
+    "https://flix-market.com",
+    "https://www.flix-market.com",
+    "https://market.easyplayy.com",
 }
 if SITE_URL:
     ALLOWED_ORIGINS.add(SITE_URL)
+if WEB_SITE_URL:
+    ALLOWED_ORIGINS.add(WEB_SITE_URL)
 
 
 def _json(data, status=200):
@@ -408,6 +413,43 @@ async def payments_create(request):
     return _json({"ok": True, **result})
 
 
+async def payments_record(request):
+    body = await request.json()
+    try:
+        user_id = int(body["user_id"])
+        product_id = int(body["product_id"])
+        months = int(body["months"])
+        amount = float(body["amount"])
+        invoice_id = str(body["invoice_id"]).strip()
+        payment_id = str(body.get("payment_id") or body["invoice_id"]).strip()
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "user_id, product_id, months, amount, invoice_id required"}, 400)
+    if not invoice_id:
+        return _json({"error": "invoice_id required"}, 400)
+
+    if not get_user_row(user_id) and not check_user(user_id):
+        add_user(user_id, body.get("username"), None)
+
+    try:
+        result = record_invoice_for_user(
+            user_id=user_id,
+            product_id=product_id,
+            months=months,
+            amount=amount,
+            invoice_id=invoice_id,
+            payment_id=payment_id,
+            payment_type=body.get("payment_type") or "one_time",
+            wallet_id=(body.get("wallet_id") or None),
+            source=body.get("source") or "site",
+        )
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+    except Exception as e:
+        log.exception("record invoice")
+        return _json({"error": f"Не вдалось записати платіж: {e}"}, 502)
+    return _json(result)
+
+
 async def payments_get(request):
     invoice_id = request.match_info["invoice_id"]
     info = get_full_payment(invoice_id)
@@ -421,8 +463,17 @@ async def mono_webhook(request):
         data = await request.json()
     except Exception:
         data = {}
-    invoice_id = (data or {}).get("invoiceId") or (data or {}).get("invoice_id")
-    log.info("mono webhook: %s status=%s", invoice_id, (data or {}).get("status"))
+    if not isinstance(data, dict):
+        data = {}
+    invoice_id = data.get("invoiceId") or data.get("invoice_id")
+    status = (data.get("status") or "").strip().lower()
+    log.info("mono webhook: %s status=%s", invoice_id, status)
+    if invoice_id:
+        try:
+            from database.client_db import save_mono_event
+            save_mono_event(str(invoice_id), status, data)
+        except Exception:
+            log.exception("webhook save event")
     try:
         from ulits.monopay_functions import check_pending_payments
         await check_pending_payments()
@@ -490,6 +541,7 @@ def build_app() -> web.Application:
     app.router.add_post("/api/v1/users/{user_id}/recurring/{sub_id}/cancel", cancel_recurring)
 
     app.router.add_post("/api/v1/payments", payments_create)
+    app.router.add_post("/api/v1/payments/record", payments_record)
     app.router.add_get("/api/v1/payments/{invoice_id}", payments_get)
     app.router.add_post("/api/v1/webhooks/mono", mono_webhook)
 

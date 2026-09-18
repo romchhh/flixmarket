@@ -107,3 +107,51 @@ def create_invoice_for_user(
         "payment_type": stored_type,
         "source": source,
     }
+
+
+def record_invoice_for_user(
+    user_id: int,
+    product_id: int,
+    months: int,
+    amount: float,
+    invoice_id: str,
+    payment_id: str,
+    payment_type: str = "one_time",
+    wallet_id: str | None = None,
+    source: str = "site",
+) -> dict:
+    """Сайт уже створив рахунок Monobank — лише записати його в БД бота."""
+    stored_type = "subscription" if payment_type in ("subscription", "recurring") else "one_time"
+    if stored_type == "subscription" and wallet_id:
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO payments_temp_data (invoice_id, wallet_id, payment_type, local_payment_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (invoice_id, wallet_id, stored_type, payment_id),
+        )
+        conn.commit()
+    ok = save_payment_info(
+        payment_id=payment_id,
+        invoice_id=invoice_id,
+        user_id=user_id,
+        product_id=product_id,
+        months=months,
+        amount=amount,
+        status="pending",
+        payment_type=stored_type,
+        source=source,
+    )
+    if not ok:
+        raise ValueError("Не вдалось записати платіж")
+    return {
+        "ok": True,
+        "payment_id": payment_id,
+        "invoice_id": invoice_id,
+        "amount": amount,
+        "months": months,
+        "product_id": product_id,
+        "payment_type": stored_type,
+        "source": source,
+        "wallet_id": wallet_id,
+    }

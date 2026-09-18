@@ -42,6 +42,9 @@ WEB_START_ORIGINS = {
     "w_": None,
     "wL": "http://localhost:3000",
     "wS": None,
+    "f0": "https://flix-market.com",
+    "f1": "https://www.flix-market.com",
+    "e0": "https://market.easyplayy.com",
 }
 
 NGROK_PREFIXES = {
@@ -55,10 +58,13 @@ NGROK_PREFIXES = {
 def parse_web_start(raw: str):
     raw = (raw or "").strip()
     if raw.startswith("/start"):
-        raw = raw.split(maxsplit=1)[1] if " " in raw else ""
+        # /start, /start@BotName, /start payload
+        parts = raw.split(maxsplit=1)
+        raw = parts[1] if len(parts) > 1 else ""
     raw = raw.strip()
     if not raw:
         return None, None
+    # інколи прилітає лише payload без /start
     for prefix, tmpl in NGROK_PREFIXES.items():
         if raw.startswith(prefix) and len(raw) > len(prefix) + 8:
             rest = raw[len(prefix):]
@@ -68,17 +74,25 @@ def parse_web_start(raw: str):
                     return token.lower(), tmpl.format(slug=slug)
     for prefix, origin in sorted(WEB_START_ORIGINS.items(), key=lambda item: -len(item[0])):
         if raw.startswith(prefix) and len(raw) > len(prefix):
-            return raw[len(prefix):], origin
-    if raw.startswith("w") and len(raw) >= 17:
-        return raw[1:], None
+            token = raw[len(prefix):]
+            if token and all(c in "0123456789abcdefABCDEF" for c in token):
+                return token.lower(), origin
+            # токен міг прийти з зайвими символами
+            if len(token) >= 8 and all(c in "0123456789abcdefABCDEF" for c in token[:16]):
+                return token[:16].lower() if len(token) >= 16 else token.lower(), origin
+    if raw.startswith("w") and len(raw) >= 17 and all(c in "0123456789abcdefABCDEF" for c in raw[1:17]):
+        return raw[1:17].lower(), None
+    # чистий hex-токен (сайт згенерував, payload згубився частково)
+    if 8 <= len(raw) <= 32 and all(c in "0123456789abcdefABCDEF" for c in raw):
+        return raw.lower(), WEB_SITE_URL or SITE_URL
     return None, None
 
 
-def signed_site_login(telegram_id: int, username, login_token: str) -> dict:
+def signed_site_payload(telegram_id: int, username, extra: dict) -> dict:
     data = {
         "id": str(telegram_id),
         "auth_date": str(int(time.time())),
-        "login_token": login_token,
+        **{k: str(v) for k, v in extra.items() if v is not None and str(v) != ""},
     }
     if username:
         data["username"] = username.lstrip("@")
@@ -86,6 +100,10 @@ def signed_site_login(telegram_id: int, username, login_token: str) -> dict:
     secret = hashlib.sha256(BOT_TOKEN.encode()).digest()
     data["hash"] = hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest()
     return data
+
+
+def signed_site_login(telegram_id: int, username, login_token: str) -> dict:
+    return signed_site_payload(telegram_id, username, {"login_token": login_token})
 
 
 def _iso_day(value: str, hour: str = "00:00:00") -> str:
@@ -161,7 +179,7 @@ async def scheduler_jobs():
     scheduler.add_job(process_recurring_payments, "interval", hours=12)
 
 
-async def notify_site_login(origins, payload: dict):
+async def notify_site(origins, path: str, payload: dict):
     if not aiohttp:
         return
     seen = set()
@@ -182,13 +200,17 @@ async def notify_site_login(origins, payload: dict):
             seen.add(origin)
             try:
                 async with session.post(
-                    f"{origin}/api/auth/telegram/bot-confirm",
+                    f"{origin}{path}",
                     data=json.dumps(payload, default=str),
                     headers=headers,
                 ) as resp:
                     await resp.read()
             except Exception as e:
-                log.warning("site login notify %s: %s", origin, e)
+                log.warning("site notify %s %s: %s", path, origin, e)
+
+
+async def notify_site_login(origins, payload: dict):
+    await notify_site(origins, "/api/auth/telegram/bot-confirm", payload)
 
 
 async def confirm_site_login(message: types.Message, token: str, origin: str | None):
@@ -223,8 +245,16 @@ async def confirm_site_login(message: types.Message, token: str, origin: str | N
         await message.answer("✅ Вхід на сайт підтверджено. Повернись на сторінку логіну — кабінет відкриється сам.")
 
 
-@router.message(F.text.regexp(r"(?i)^(?:/start(?:@\w+)?\s+)?(?:n[0-3]|w[0-2NLS_])[A-Za-z0-9_-]{8,}$"))
+@router.message(F.text.regexp(r"(?i)^(?:/start(?:@\w+)?\s+)?(?:n[0-3]|w[0-2NLS_]|f[01]|e0)[A-Fa-f0-9]{8,}$"))
 async def start_web_payload(message: types.Message):
+    token, origin = parse_web_start(message.text or "")
+    if token:
+        await confirm_site_login(message, token, origin)
+
+
+@router.message(F.text.regexp(r"(?i)^(?:f[01]|e0|w[0-2])[A-Fa-f0-9]{8,32}$"))
+async def web_payload_alone(message: types.Message):
+    """Користувач вставив payload без /start — теж логін на сайт."""
     token, origin = parse_web_start(message.text or "")
     if token:
         await confirm_site_login(message, token, origin)
@@ -245,6 +275,18 @@ async def start(message: types.Message, command: CommandObject):
     if token:
         await confirm_site_login(message, token, origin)
         return
+
+    # Голий /start після кліку з сайту часто без payload — підкажемо
+    if not raw:
+        await message.answer(
+            "Якщо хочеш увійти на сайт — повернись на flix-market.com, "
+            "натисни «Увійти через Telegram» ще раз і в боті натисни синю кнопку <b>Start</b> "
+            "(не пиши /start вручну).",
+            parse_mode="HTML",
+            reply_markup=get_start_keyboard(user_id) if check_user(user_id) else None,
+        )
+        if check_user(user_id):
+            return
 
     user_exists = check_user(user_id)
     if user_exists:

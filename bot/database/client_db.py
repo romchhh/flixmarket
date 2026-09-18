@@ -546,6 +546,39 @@ def create_payments_temp_data_table():
     conn.commit()
     
     
+def save_mono_event(invoice_id: str, status: str, payload: dict) -> None:
+    import json
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mono_events (
+            id INTEGER PRIMARY KEY,
+            invoice_id TEXT,
+            status TEXT,
+            payload TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    cursor.execute(
+        """
+        INSERT INTO mono_events (invoice_id, status, payload, created_at)
+        VALUES (?, ?, ?, datetime('now'))
+        """,
+        (invoice_id, status, json.dumps(payload, ensure_ascii=False, default=str)),
+    )
+    wallet = payload.get("walletData") if isinstance(payload, dict) else None
+    wallet_id = wallet.get("walletId") if isinstance(wallet, dict) else None
+    if invoice_id and wallet_id:
+        cursor.execute(
+            """
+            UPDATE payments_temp_data SET wallet_id = COALESCE(wallet_id, ?)
+            WHERE invoice_id = ?
+            """,
+            (wallet_id, invoice_id),
+        )
+    conn.commit()
+
+
 def add_subscription(user_id: int, product_type: str, product_id: int, product_name: str, 
                     price: float, start_date: str, end_date: str, status: str):
     try:
