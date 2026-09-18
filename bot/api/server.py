@@ -26,6 +26,7 @@ from database.client_db import (
     get_user_recurring_subscriptions,
     get_user_row,
     get_user_subscriptions,
+    get_user_token,
     get_username_by_id,
     get_web_login,
     consume_link_code,
@@ -134,6 +135,7 @@ def _sub_payload(user_id: int) -> dict:
             expires_iso = datetime.strptime(end, "%Y-%m-%d").isoformat() + "Z"
         except ValueError:
             expires_iso = end
+        serialized = serialize_product(product, _public_url()) if product else None
         one_time.append({
             "id": f"one-{sub.get('id')}",
             "botId": sub.get("id"),
@@ -145,10 +147,17 @@ def _sub_payload(user_id: int) -> dict:
             "expiresAt": expires_iso,
             "status": sub.get("status"),
             "source": sub.get("source") or "bot",
-            "slug": slug_for(product) if product else "",
-            "icon": serialize_product(product, _public_url())["icon"] if product else "",
-            "color": serialize_product(product, _public_url())["color"] if product else "#2B5CF6",
+            "slug": serialized["slug"] if serialized else (slug_for(product) if product else ""),
+            "icon": serialized["icon"] if serialized else "",
+            "color": serialized["color"] if serialized else "#2B5CF6",
+            "photoUrl": serialized["photoUrl"] if serialized else None,
         })
+
+    token_data = get_user_token(user_id)
+    masked_card = None
+    card_type = None
+    if token_data:
+        _, _, masked_card, card_type = token_data
 
     recurring = []
     for row in get_user_recurring_subscriptions(user_id):
@@ -181,6 +190,9 @@ def _sub_payload(user_id: int) -> dict:
             "slug": serialized["slug"] if serialized else "",
             "icon": serialized["icon"] if serialized else "",
             "color": serialized["color"] if serialized else "#2B5CF6",
+            "photoUrl": serialized["photoUrl"] if serialized else None,
+            "maskedCard": masked_card,
+            "cardType": card_type,
         })
     return {"oneTime": one_time, "recurring": recurring}
 
