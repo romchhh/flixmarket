@@ -1097,6 +1097,76 @@ def get_recurring_subscription(subscription_id: int, user_id: int | None = None)
         return None
 
 
+def get_user_billing_history(user_id: int, limit: int = 80) -> list:
+    """Покупки + автосписання для кабінету на сайті."""
+    items: list[dict] = []
+    try:
+        cursor.execute(
+            """
+            SELECT p.payment_id, p.invoice_id, p.product_id, p.months, p.amount, p.status,
+                   p.payment_type, p.source, p.created_at, pr.product_name
+            FROM payments p
+            LEFT JOIN products pr ON pr.id = p.product_id
+            WHERE p.user_id = ?
+            ORDER BY p.created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        )
+        for r in cursor.fetchall():
+            items.append({
+                "id": f"pay-{r[1] or r[0]}",
+                "kind": "purchase",
+                "productName": r[9] or "Підписка",
+                "productId": r[2],
+                "months": r[3],
+                "amount": r[4],
+                "status": r[5],
+                "paymentType": r[6],
+                "source": r[7] or "bot",
+                "invoiceId": r[1],
+                "subscriptionId": None,
+                "createdAt": r[8],
+                "errorMessage": None,
+            })
+
+        cursor.execute(
+            """
+            SELECT sp.id, sp.subscription_id, sp.amount, sp.status, sp.invoice_id,
+                   sp.payment_id, sp.payment_date, sp.error_message,
+                   rs.product_name, rs.product_id
+            FROM subscription_payments sp
+            LEFT JOIN recurring_subscriptions rs ON rs.id = sp.subscription_id
+            WHERE sp.user_id = ?
+            ORDER BY sp.payment_date DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        )
+        for r in cursor.fetchall():
+            items.append({
+                "id": f"subpay-{r[0]}",
+                "kind": "charge",
+                "productName": r[8] or "Підписка",
+                "productId": r[9],
+                "months": None,
+                "amount": r[2],
+                "status": r[3],
+                "paymentType": "subscription",
+                "source": "bot",
+                "invoiceId": r[4],
+                "subscriptionId": r[1],
+                "createdAt": r[6] or r[0],
+                "errorMessage": r[7],
+            })
+
+        items.sort(key=lambda x: str(x.get("createdAt") or ""), reverse=True)
+        return items[:limit]
+    except sqlite3.Error as e:
+        print(f"Помилка get_user_billing_history: {e}")
+        return []
+
+
 def get_user_payments(user_id: int, limit: int = 50) -> list:
     try:
         cursor.execute(

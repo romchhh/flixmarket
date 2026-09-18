@@ -22,6 +22,7 @@ from database.client_db import (
     get_product_full,
     get_product_types_full,
     get_recurring_subscription,
+    get_user_billing_history,
     get_user_payments,
     get_user_recurring_subscriptions,
     get_user_row,
@@ -121,6 +122,15 @@ def _product_by_slug(slug: str) -> dict | None:
     return None
 
 
+def _clean_card_type(card_type) -> str | None:
+    if not card_type:
+        return None
+    t = str(card_type).strip().lower()
+    if t in ("unknown", "none", "null", "n/a", ""):
+        return None
+    return str(card_type).strip().upper()
+
+
 def _sub_payload(user_id: int) -> dict:
     one_time = []
     for sub in get_user_subscriptions(user_id):
@@ -192,7 +202,7 @@ def _sub_payload(user_id: int) -> dict:
             "color": serialized["color"] if serialized else "#2B5CF6",
             "photoUrl": serialized["photoUrl"] if serialized else None,
             "maskedCard": masked_card,
-            "cardType": card_type,
+            "cardType": _clean_card_type(card_type),
         })
     return {"oneTime": one_time, "recurring": recurring}
 
@@ -377,7 +387,7 @@ async def users_subscriptions(request):
 
 async def users_payments(request):
     user_id = int(request.match_info["user_id"])
-    return _json({"payments": get_user_payments(user_id)})
+    return _json({"payments": get_user_billing_history(user_id)})
 
 
 async def cancel_recurring(request):
