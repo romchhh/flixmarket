@@ -140,6 +140,59 @@ def enable_wal():
         print(f"Помилка WAL: {e}")
 
 
+def create_link_codes_table():
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS link_codes (
+            code TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.commit()
+
+
+def issue_link_code(user_id: int, minutes: int = 10) -> str:
+    """Одноразовий код для привʼязки покупок бота до акаунта на сайті."""
+    import secrets
+
+    create_link_codes_table()
+    code = secrets.token_hex(4).upper()
+    expires = (datetime.utcnow() + timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("DELETE FROM link_codes WHERE user_id = ?", (user_id,))
+    cursor.execute(
+        "INSERT INTO link_codes (code, user_id, expires_at) VALUES (?, ?, ?)",
+        (code, user_id, expires),
+    )
+    conn.commit()
+    return code
+
+
+def consume_link_code(code: str) -> int | None:
+    create_link_codes_table()
+    clean = (code or "").strip().upper()
+    if not clean:
+        return None
+    cursor.execute("SELECT user_id, expires_at FROM link_codes WHERE code = ?", (clean,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    user_id, expires_at = row
+    try:
+        exp = datetime.strptime(str(expires_at)[:19], "%Y-%m-%d %H:%M:%S")
+        if datetime.utcnow() > exp:
+            cursor.execute("DELETE FROM link_codes WHERE code = ?", (clean,))
+            conn.commit()
+            return None
+    except ValueError:
+        pass
+    cursor.execute("DELETE FROM link_codes WHERE code = ?", (clean,))
+    conn.commit()
+    return int(user_id)
+
+
 def create_web_logins_table():
     cursor.execute(
         """
@@ -1540,6 +1593,7 @@ def create_tables():
     migrate_users_site_fields()
     migrate_payments_source()
     migrate_subscriptions_source()
+    create_link_codes_table()
     create_web_logins_table()
     enable_wal()
     from database.links_db import create_table_links

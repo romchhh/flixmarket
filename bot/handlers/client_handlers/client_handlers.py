@@ -5,7 +5,7 @@ from main import bot, scheduler
 from aiogram.filters import Command, CommandObject
 from keyboards.client_keyboards import get_start_keyboard, get_socials_keyboard, get_manager_keyboard, get_catalog_keyboard, get_products_keyboard, get_product_info_keyboard, get_payment_keyboard, get_payment_choice_keyboard, get_profile_keyboard, get_back_to_profile_keyboard, get_referral_keyboard, get_contest_keyboard
 from Content.texts import get_greeting_message, get_about_text, get_faq_text, get_manager_text, get_help_text, get_referral_text, get_contest_text, MENU_EMOJI_IDS, get_calendar_emoji_html, get_tv_emoji_html, get_person_emoji_html, get_premium_emoji, format_date, format_product_name_for_display
-from database.client_db import create_table, check_user, add_user, create_products_table, get_product_by_id, save_payment_info, create_payments_table, create_subscriptions_table, get_user_info, get_user_subscriptions, get_user_recurring_subscriptions, get_user_name, cursor, conn, create_contest_table, get_partner_balance, get_partner_referral_percent, get_partner_earnings_history, create_withdrawal_request, deduct_partner_balance, add_subscription, get_product_type, confirm_web_login, get_web_login
+from database.client_db import create_table, check_user, add_user, create_products_table, get_product_by_id, save_payment_info, create_payments_table, create_subscriptions_table, get_user_info, get_user_subscriptions, get_user_recurring_subscriptions, get_user_name, cursor, conn, create_contest_table, get_partner_balance, get_partner_referral_percent, get_partner_earnings_history, create_withdrawal_request, deduct_partner_balance, add_subscription, get_product_type, confirm_web_login, get_web_login, issue_link_code
 from database.links_db import LINK_START_PREFIX, increment_link_count, link_exists
 from ulits.monopay_functions import PaymentManager, check_pending_payments
 import asyncio
@@ -259,6 +259,24 @@ async def web_payload_alone(message: types.Message):
     token, origin = parse_web_start(message.text or "")
     if token:
         await confirm_site_login(message, token, origin)
+
+
+@router.message(Command("link"))
+async def link_site_account(message: types.Message):
+    user_id = message.from_user.id
+    if not check_user(user_id):
+        add_user(user_id, message.from_user.username, None, None)
+    code = issue_link_code(user_id)
+    site = (WEB_SITE_URL or SITE_URL or "https://flix-market.com").rstrip("/")
+    await message.answer(
+        "🔗 <b>Код для привʼязки до сайту</b>\n\n"
+        f"<code>{code}</code>\n\n"
+        f"1. Увійди на <a href=\"{site}/link\">сайт</a>\n"
+        "2. Встав цей код у форму (діє 10 хв)\n\n"
+        "Підписки з бота зʼявляться в кабінеті.",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 
 @router.message(Command("start"))

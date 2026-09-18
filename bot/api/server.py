@@ -26,7 +26,9 @@ from database.client_db import (
     get_user_recurring_subscriptions,
     get_user_row,
     get_user_subscriptions,
+    get_username_by_id,
     get_web_login,
+    consume_link_code,
     list_recent_payments,
     list_users,
     merge_site_user_to_telegram,
@@ -320,6 +322,24 @@ async def users_get(request):
     return _json(payload)
 
 
+async def link_codes_consume(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "code required"}, 400)
+    code = str(body.get("code") or "").strip()
+    if not code:
+        return _json({"error": "code required"}, 400)
+    user_id = consume_link_code(code)
+    if not user_id:
+        return _json({"error": "Код недійсний або прострочений"}, 404)
+    return _json({
+        "ok": True,
+        "userId": user_id,
+        "username": get_username_by_id(user_id),
+    })
+
+
 async def users_link(request):
     body = await request.json()
     site_user_id = int(body.get("site_user_id"))
@@ -543,6 +563,7 @@ def build_app() -> web.Application:
     app.router.add_post("/api/v1/users", users_create)
     app.router.add_get("/api/v1/users/{user_id}", users_get)
     app.router.add_post("/api/v1/users/link", users_link)
+    app.router.add_post("/api/v1/link-codes/consume", link_codes_consume)
     app.router.add_get("/api/v1/users/{user_id}/subscriptions", users_subscriptions)
     app.router.add_get("/api/v1/users/{user_id}/payments", users_payments)
     app.router.add_post("/api/v1/users/{user_id}/recurring/{sub_id}/cancel", cancel_recurring)
