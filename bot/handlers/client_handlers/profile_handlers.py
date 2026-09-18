@@ -51,7 +51,7 @@ async def profile_handler(message: types.Message):
         
         # Повторювані підписки
         for sub in recurring_subscriptions:
-            sub_id, product_name, months, price, next_payment_date, status, payment_failures = sub
+            sub_id, product_name, months, price, next_payment_date, status, payment_failures = sub[:7]
             
             status_emoji = get_premium_emoji("check") if status == "active" else "❌"
             next_payment = datetime.strptime(next_payment_date, '%Y-%m-%d %H:%M:%S')
@@ -129,7 +129,7 @@ async def refresh_profile(callback: types.CallbackQuery):
             )
         
         for sub in recurring_subscriptions:
-            sub_id, product_name, months, price, next_payment_date, status, payment_failures = sub
+            sub_id, product_name, months, price, next_payment_date, status, payment_failures = sub[:7]
             
             status_emoji = get_premium_emoji("check") if status == "active" else "❌"
             next_payment = datetime.strptime(next_payment_date, '%Y-%m-%d %H:%M:%S')
@@ -212,7 +212,7 @@ async def manage_subscriptions(callback: types.CallbackQuery):
         ])
     
     for sub in recurring_subscriptions:
-        sub_id, product_name, months, price, next_payment_date, status, payment_failures = sub
+        sub_id, product_name, months, price, next_payment_date, status, payment_failures = sub[:7]
         status_text = get_premium_emoji("check") if status == "active" else "❌"
         keyboard.append([
             InlineKeyboardButton(
@@ -306,7 +306,7 @@ async def view_recurring_subscription(callback: types.CallbackQuery):
         await callback.answer("Підписка не знайдена", show_alert=True)
         return
     
-    sub_id, product_name, months, price, next_payment_date, status, payment_failures = subscription
+    sub_id, product_name, months, price, next_payment_date, status, payment_failures = subscription[:7]
     next_payment = datetime.strptime(next_payment_date, '%Y-%m-%d %H:%M:%S')
     
     status_emoji = get_premium_emoji("check") if status == "active" else "❌"
@@ -391,7 +391,7 @@ async def confirm_cancel_subscription(callback: types.CallbackQuery):
         await callback.answer("Підписка не знайдена", show_alert=True)
         return
     
-    _, product_name, months, price, next_payment_date, status, _ = subscription
+    _, product_name, months, price, next_payment_date, status, _ = subscription[:7]
     next_payment = datetime.strptime(next_payment_date, '%Y-%m-%d %H:%M:%S')
     
     confirmation_text = (
@@ -445,14 +445,17 @@ async def cancel_subscription(callback: types.CallbackQuery):
         await callback.answer("Підписка не знайдена", show_alert=True)
         return
     
-    _, product_name, months, price, next_payment_date, status, _ = subscription
+    _, product_name, months, price, next_payment_date, status, _ = subscription[:7]
+    purchase_source = subscription[7] if len(subscription) > 7 else "bot"
     
     # Імпортуємо функцію деактивації
     from database.client_db import deactivate_subscription
     
     if deactivate_subscription(subscription_id):
         # Повідомляємо адміністраторів про скасування
-        await notify_admins_user_cancelled_subscription(user_id, product_name, "користувач")
+        await notify_admins_user_cancelled_subscription(
+            user_id, product_name, "користувач", source=purchase_source
+        )
         
         await callback.answer("✅ Підписка успішно скасована", show_alert=True)
         
@@ -565,17 +568,24 @@ async def change_card_info(callback: types.CallbackQuery):
     )
 
 
-async def notify_admins_user_cancelled_subscription(user_id: int, product_name: str, cancellation_reason: str):
+async def notify_admins_user_cancelled_subscription(
+    user_id: int,
+    product_name: str,
+    cancellation_reason: str,
+    source: str = "bot",
+):
     """Повідомляє адміністраторів про скасування підписки користувачем"""
     try:
         from config import admin_chat_id
         from database.client_db import get_username_by_id
         from main import bot
+        from Content.texts import format_admin_source_line
         
         username = get_username_by_id(user_id)
         user_line = f"Користувач: @{username} (ID: <code>{user_id}</code>)" if (username and str(username).strip()) else f"Користувач: ID <code>{user_id}</code> (прихований профіль)"
         admin_message = (
             f"🚫 <b>Підписка скасована користувачем</b>\n\n"
+            f"{format_admin_source_line(source)}\n"
             f"{user_line}\n"
             f"Підписка: <b>{product_name}</b>\n"
             f"Причина: <b>{cancellation_reason}</b>\n\n"

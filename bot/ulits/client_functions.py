@@ -45,7 +45,7 @@ async def get_profile_text(user_id: int, username: str) -> str:
             )
         
         for sub in recurring_subscriptions:
-            sub_id, product_name, months, price, next_payment_date, status, payment_failures = sub
+            sub_id, product_name, months, price, next_payment_date, status, payment_failures = sub[:7]
             
             status_emoji = get_premium_emoji("check") if status == "active" else "❌"
             next_payment = datetime.strptime(next_payment_date, '%Y-%m-%d %H:%M:%S')

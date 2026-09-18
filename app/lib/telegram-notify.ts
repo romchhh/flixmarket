@@ -231,12 +231,14 @@ export function getAdminSubscriptionCancelledText(
   userId: number,
   username: string | null,
   productName: string,
-  source: "miniapp" | "bot" = "miniapp"
+  source: "miniapp" | "bot" | "site" = "miniapp"
 ): string {
   const userLine = formatAdminUserLine(userId, username);
-  const sourceLabel = source === "miniapp" ? " (міні-додаток)" : "";
+  const sourceLabel =
+    source === "miniapp" ? "📱 Мінідодаток" : source === "site" ? "🌐 Сайт" : "🤖 Бот";
   return (
-    `🚫 <b>Підписка скасована${sourceLabel}</b>\n\n` +
+    `🚫 <b>Підписка скасована</b>\n\n` +
+    `📍 Джерело: <b>${sourceLabel}</b>\n` +
     `${userLine}\n` +
     `Підписка: <b>${productName || "—"}</b>\n\n` +
     `💡 Користувач може поновити підписку самостійно`

@@ -142,7 +142,7 @@ def _sub_payload(user_id: int) -> dict:
             "startsAt": starts_iso,
             "expiresAt": expires_iso,
             "status": sub.get("status"),
-            "source": "bot",
+            "source": sub.get("source") or "bot",
             "slug": slug_for(product) if product else "",
             "icon": serialize_product(product, _public_url())["icon"] if product else "",
             "color": serialize_product(product, _public_url())["color"] if product else "#2B5CF6",
@@ -150,7 +150,8 @@ def _sub_payload(user_id: int) -> dict:
 
     recurring = []
     for row in get_user_recurring_subscriptions(user_id):
-        sub_id, product_name, months, price, next_payment_date, status, payment_failures = row
+        sub_id, product_name, months, price, next_payment_date, status, payment_failures = row[:7]
+        src = row[7] if len(row) > 7 else "bot"
         product = None
         full = get_recurring_subscription(sub_id)
         if full:
@@ -174,7 +175,7 @@ def _sub_payload(user_id: int) -> dict:
             "nextPaymentAt": nxt.isoformat() + "Z",
             "status": status,
             "paymentFailures": payment_failures,
-            "source": "bot",
+            "source": (full.get("source") if full else None) or src or "bot",
             "slug": serialized["slug"] if serialized else "",
             "icon": serialized["icon"] if serialized else "",
             "color": serialized["color"] if serialized else "#2B5CF6",
@@ -371,7 +372,13 @@ async def cancel_recurring(request):
         if admin_chat_id:
             await bot.send_message(
                 admin_chat_id,
-                get_admin_subscription_cancelled_text(user_id, get_username_by_id(user_id), sub["product_name"]),
+                get_admin_subscription_cancelled_text(
+                    user_id,
+                    get_username_by_id(user_id),
+                    sub["product_name"],
+                    source=sub.get("source") or "bot",
+                    reason="Скасовано користувачем (сайт / API)",
+                ),
                 parse_mode="HTML",
                 reply_markup=get_write_to_user_keyboard(user_id),
             )

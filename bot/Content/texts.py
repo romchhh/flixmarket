@@ -358,6 +358,33 @@ def get_user_contact_manager_text(payment_id: str) -> str:
 
 # --- Адмін ---
 
+SOURCE_LABELS = {
+    "bot": "🤖 Бот",
+    "site": "🌐 Сайт",
+    "miniapp": "📱 Мінідодаток",
+}
+
+
+def normalize_purchase_source(source: str | None) -> str:
+    key = (source or "bot").strip().lower()
+    aliases = {
+        "mini": "miniapp",
+        "mini-app": "miniapp",
+        "mini_app": "miniapp",
+        "web": "site",
+        "telegram": "bot",
+    }
+    key = aliases.get(key, key)
+    return key if key in SOURCE_LABELS else "bot"
+
+
+def format_source_label(source: str | None) -> str:
+    return SOURCE_LABELS[normalize_purchase_source(source)]
+
+
+def format_admin_source_line(source: str | None) -> str:
+    return f"📍 Джерело: <b>{format_source_label(source)}</b>"
+
 
 def get_admin_new_subscription_text(
     payment_id: str,
@@ -369,12 +396,21 @@ def get_admin_new_subscription_text(
     ref_id: int | None,
     ref_username: str | None,
     credit_amount: float,
+    source: str | None = "bot",
 ) -> str:
     """Текст адмін-повідомлення «Нова підписка!»."""
     cal = get_calendar_emoji_html()
     m = _months_word(months)
+    channel = normalize_purchase_source(source)
+    if channel == "site":
+        title = "Нова підписка з сайту!"
+    elif channel == "miniapp":
+        title = "Нова підписка з мінідодатку!"
+    else:
+        title = "Нова підписка!"
     return (
-        f"{get_premium_emoji('money')} <b>Нова підписка!</b>\n\n"
+        f"{get_premium_emoji('money')} <b>{title}</b>\n\n"
+        f"{format_admin_source_line(channel)}\n"
         f"ID платежу: <code>{payment_id}</code>\n"
         f"Тип: {cal} Підписка\n"
         f"{format_admin_user_line(user_id, username)}\n"
@@ -396,10 +432,19 @@ def get_admin_new_one_time_text(
     ref_id: int | None,
     ref_username: str | None,
     credit_amount: float,
+    source: str | None = "bot",
 ) -> str:
     """Текст адмін-повідомлення «Нова оплата!» (одноразова)."""
+    channel = normalize_purchase_source(source)
+    if channel == "site":
+        title = "Нова оплата з сайту!"
+    elif channel == "miniapp":
+        title = "Нова оплата з мінідодатку!"
+    else:
+        title = "Нова оплата!"
     return (
-        f"{get_premium_emoji('money')} <b>Нова оплата!</b>\n\n"
+        f"{get_premium_emoji('money')} <b>{title}</b>\n\n"
+        f"{format_admin_source_line(channel)}\n"
         f"ID платежу: <code>{invoice_id}</code>\n"
         f"Тип: {get_premium_emoji('card')} Одноразова оплата\n"
         f"{format_admin_user_line(user_id, username)}\n"
@@ -438,11 +483,13 @@ def get_admin_auto_payment_success_text(
     invoice_info: str,
     card_info: str,
     token_info: str,
+    source: str | None = "bot",
 ) -> str:
     """Текст адміну: автоматичний платіж успішно проведено."""
     m = _months_word(months)
     return (
         f"🔄 <b>Автоматичний платіж успішно проведено</b>\n\n"
+        f"{format_admin_source_line(source)}\n"
         f"{format_admin_user_line(user_id, username)}\n"
         f"Підписка: <b>{product_name}</b>\n"
         f"Сума: <b>{amount}₴</b>\n"
@@ -490,10 +537,12 @@ def get_admin_auto_payment_failed_text(
     invoice_info: str,
     token_info: str,
     reason_info: str,
+    source: str | None = "bot",
 ) -> str:
     """Текст адміну: невдалий автоматичний платіж."""
     return (
         f"❌ <b>Невдалий автоматичний платіж</b>\n\n"
+        f"{format_admin_source_line(source)}\n"
         f"{format_admin_user_line(user_id, username)}\n"
         f"Підписка: <b>{product_name}</b>\n"
         f"Картка: <b>{masked_card}</b>\n\n"
@@ -524,14 +573,16 @@ def get_admin_token_invalid_text(
     product_name: str,
     masked_card: str,
     error_text: str,
+    source: str | None = "bot",
 ) -> str:
     """Текст адміну: підписка скасована через невалідний токен."""
     return (
         f"🔴 <b>Підписка скасована через невалідний токен</b>\n\n"
+        f"{format_admin_source_line(source)}\n"
         f"{format_admin_user_line(user_id, username)}\n"
         f"Підписка: <b>{product_name}</b>\n"
         f"Картка: <b>{masked_card}</b>\n"
-        f"Помилка: <code>{error_text}</code>\n\n"
+        f"Помилка: <code>{escape(str(error_text))}</code>\n\n"
         f"💡 Користувач має оформити нову підписку з новою карткою"
     )
 
@@ -547,13 +598,19 @@ def get_user_subscription_cancelled_text(product_name: str) -> str:
 
 
 def get_admin_subscription_cancelled_text(
-    user_id: int, username: str | None, product_name: str
+    user_id: int,
+    username: str | None,
+    product_name: str,
+    source: str | None = "bot",
+    reason: str | None = None,
 ) -> str:
-    """Текст адміну: підписка автоматично скасована."""
+    """Текст адміну: підписка скасована."""
+    reason_line = reason or "Багато невдалих спроб оплати"
     return (
-        f"🚫 <b>Підписка автоматично скасована</b>\n\n"
+        f"🚫 <b>Підписка скасована</b>\n\n"
+        f"{format_admin_source_line(source)}\n"
         f"{format_admin_user_line(user_id, username)}\n"
         f"Підписка: <b>{product_name}</b>\n\n"
-        f"🔴 Причина: Багато невдалих спроб оплати\n"
+        f"🔴 Причина: {reason_line}\n"
         f"💡 Користувач може поновити підписку самостійно"
     )

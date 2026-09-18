@@ -326,17 +326,18 @@ export function savePaymentInfo(
   months: number,
   amount: number,
   status: string,
-  paymentType: string
+  paymentType: string,
+  source: string = "miniapp"
 ): boolean {
   const database = getDb();
   try {
     database
       .prepare(
         `INSERT INTO payments (
-          payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+          payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, source, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
       )
-      .run(paymentId, invoiceId, userId, productId, months, amount, status, paymentType);
+      .run(paymentId, invoiceId, userId, productId, months, amount, status, paymentType, source);
     return true;
   } catch {
     return false;

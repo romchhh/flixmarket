@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from database.client_db import get_active_subscriptions, get_active_recurring_subscriptions, get_user_token, update_subscription_next_payment, increment_payment_failures, postpone_subscription_retry, reset_payment_failures, deactivate_subscription, save_subscription_payment, get_ref_id_by_user, add_partner_credit, get_partner_referral_percent, get_username_by_id
+from database.client_db import get_active_subscriptions, get_active_recurring_subscriptions, get_user_token, update_subscription_next_payment, increment_payment_failures, postpone_subscription_retry, reset_payment_failures, deactivate_subscription, save_subscription_payment, get_ref_id_by_user, add_partner_credit, get_partner_referral_percent, get_username_by_id, get_recurring_subscription
 from database.links_db import track_link_purchase
 from ulits.monopay_functions import PaymentManager
 from Content.texts import get_premium_emoji
@@ -28,6 +28,11 @@ MAX_PAYMENT_FAILURES = 3
 RETRY_DELAY_DAYS = 1
 
 
+def _subscription_source(subscription_id: int) -> str:
+    sub = get_recurring_subscription(subscription_id)
+    return (sub or {}).get("source") or "bot"
+
+
 async def handle_recurring_payment_failure(
     subscription_id: int,
     user_id: int,
@@ -44,6 +49,7 @@ async def handle_recurring_payment_failure(
     Після MAX_PAYMENT_FAILURES — деактивує підписку.
     Повертає True, якщо підписку деактивовано.
     """
+    source = _subscription_source(subscription_id)
     failures = increment_payment_failures(subscription_id)
     logging.info(
         f"📊 Підписка {subscription_id}: невдалих спроб {failures}/{MAX_PAYMENT_FAILURES}"
@@ -54,7 +60,7 @@ async def handle_recurring_payment_failure(
             f"🚫 Підписка {subscription_id} деактивується після {failures} невдалих спроб"
         )
         deactivate_subscription(subscription_id)
-        await notify_user_subscription_cancelled(user_id, product_name)
+        await notify_user_subscription_cancelled(user_id, product_name, source=source)
         return True
 
     postpone_subscription_retry(subscription_id, RETRY_DELAY_DAYS)
@@ -72,6 +78,7 @@ async def handle_recurring_payment_failure(
             failures=failures,
             max_failures=MAX_PAYMENT_FAILURES,
             retry_days=RETRY_DELAY_DAYS,
+            source=source,
         )
     return False
 
@@ -206,7 +213,10 @@ async def process_recurring_payments():
                         # Токен не знайдено - деактивуємо підписку, бо токен не дійсний
                         logging.error(f"🚫 Токен картки не знайдено для підписки {subscription_id}. Деактивуємо підписку.")
                         deactivate_subscription(subscription_id)
-                        await notify_user_token_invalid(user_id, product_name, masked_card, err_text)
+                        await notify_user_token_invalid(
+                            user_id, product_name, masked_card, err_text,
+                            source=_subscription_source(subscription_id),
+                        )
                     else:
                         await handle_recurring_payment_failure(
                             subscription_id=subscription_id,
@@ -346,7 +356,8 @@ async def process_recurring_payments():
                         months=months,
                         invoice_id=invoice_id,
                         masked_card=status_masked_card,
-                        card_token=card_token
+                        card_token=card_token,
+                        source=_subscription_source(subscription_id),
                     )
                     
                     logging.info(f"✅ Успішний платіж для підписки {subscription_id}, користувач {user_id}, invoice_id={invoice_id}")
@@ -456,7 +467,8 @@ async def process_recurring_payments():
 
 
 async def notify_user_payment_success(user_id: int, product_name: str, amount: float, months: int,
-                                     invoice_id: str = None, masked_card: str = None, card_token: str = None):
+                                     invoice_id: str = None, masked_card: str = None, card_token: str = None,
+                                     source: str = "bot"):
     try:
         next_date_str = (datetime.now() + timedelta(days=30 * months)).strftime('%d.%m.%Y')
         await bot.send_message(
@@ -477,7 +489,7 @@ async def notify_user_payment_success(user_id: int, product_name: str, amount: f
                 admin_chat_id,
                 get_admin_auto_payment_success_text(
                     user_id, username, product_name, amount, months, next_date_str,
-                    invoice_info, card_info, token_info,
+                    invoice_info, card_info, token_info, source,
                 ),
                 parse_mode="HTML",
                 reply_markup=get_write_to_user_keyboard(user_id),
@@ -493,7 +505,8 @@ async def notify_user_payment_failed(user_id: int, product_name: str, masked_car
                                      invoice_id: str = None, card_token: str = None,
                                      failure_reason: str = None,
                                      failures: int = None, max_failures: int = 3,
-                                     retry_days: int = 1):
+                                     retry_days: int = 1,
+                                     source: str = "bot"):
     try:
         await bot.send_message(
             user_id,
@@ -519,7 +532,7 @@ async def notify_user_payment_failed(user_id: int, product_name: str, masked_car
                 admin_chat_id,
                 get_admin_auto_payment_failed_text(
                     user_id, username, product_name, masked_card,
-                    invoice_info, token_info, reason_info,
+                    invoice_info, token_info, reason_info, source,
                 ),
                 parse_mode="HTML",
                 reply_markup=get_write_to_user_keyboard(user_id),
@@ -531,7 +544,8 @@ async def notify_user_payment_failed(user_id: int, product_name: str, masked_car
         logging.error(f"Помилка при надсиланні повідомлення про невдалий платіж: {e}")
 
 
-async def notify_user_token_invalid(user_id: int, product_name: str, masked_card: str, error_text: str):
+async def notify_user_token_invalid(user_id: int, product_name: str, masked_card: str, error_text: str,
+                                    source: str = "bot"):
     """Повідомляє користувача про невалідний токен картки"""
     try:
         await bot.send_message(
@@ -543,7 +557,7 @@ async def notify_user_token_invalid(user_id: int, product_name: str, masked_card
         try:
             await bot.send_message(
                 admin_chat_id,
-                get_admin_token_invalid_text(user_id, username, product_name, masked_card, error_text),
+                get_admin_token_invalid_text(user_id, username, product_name, masked_card, error_text, source),
                 parse_mode="HTML",
                 reply_markup=get_write_to_user_keyboard(user_id),
             )
@@ -554,7 +568,7 @@ async def notify_user_token_invalid(user_id: int, product_name: str, masked_card
         logging.error(f"Помилка при надсиланні повідомлення про невалідний токен: {e}")
 
 
-async def notify_user_subscription_cancelled(user_id: int, product_name: str):
+async def notify_user_subscription_cancelled(user_id: int, product_name: str, source: str = "bot"):
     try:
         await bot.send_message(
             user_id,
@@ -565,7 +579,7 @@ async def notify_user_subscription_cancelled(user_id: int, product_name: str):
         try:
             await bot.send_message(
                 admin_chat_id,
-                get_admin_subscription_cancelled_text(user_id, username, product_name),
+                get_admin_subscription_cancelled_text(user_id, username, product_name, source),
                 parse_mode="HTML",
                 reply_markup=get_write_to_user_keyboard(user_id),
             )
@@ -697,7 +711,8 @@ async def check_processing_payments():
                         months=months,
                         invoice_id=invoice_id,
                         masked_card=masked_card,
-                        card_token=card_token
+                        card_token=card_token,
+                        source=_subscription_source(subscription_id),
                     )
                     
                 elif current_status == 'failure':

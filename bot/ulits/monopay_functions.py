@@ -293,8 +293,13 @@ async def check_pending_payments():
         logging.warning("Список pending_payments порожній. Перевірте базу даних")
 
     for payment in pending_payments:
-        invoice_id, user_id, product_id, months, amount, payment_type = payment
-        logging.info(f"Перевірка платежу з БД: {invoice_id} (користувач: {user_id}, тип: {payment_type})")
+        if len(payment) >= 7:
+            invoice_id, user_id, product_id, months, amount, payment_type, purchase_source = payment[:7]
+        else:
+            invoice_id, user_id, product_id, months, amount, payment_type = payment[:6]
+            purchase_source = "bot"
+        purchase_source = purchase_source or "bot"
+        logging.info(f"Перевірка платежу з БД: {invoice_id} (користувач: {user_id}, тип: {payment_type}, джерело: {purchase_source})")
         
         headers = {"X-Token": payment_manager.token}
         url = f"{payment_manager.host}api/merchant/invoice/status?invoiceId={invoice_id}"
@@ -436,7 +441,8 @@ async def check_pending_payments():
                                 product_name=product_name,
                                 months=months,
                                 price=amount,
-                                wallet_id=wallet_id
+                                wallet_id=wallet_id,
+                                source=purchase_source,
                             )
                             card_info = f"{get_premium_emoji('card')} <b>Картка:</b> {masked_card}"
                             if card_type != "unknown":
@@ -458,7 +464,10 @@ async def check_pending_payments():
                                 ])
                                 await bot.send_message(
                                     admin_chat_id,
-                                    get_admin_new_subscription_text(payment_id, user_id, sub_username, product_name, amount, months, ref_id, sub_ref_username, sub_credit),
+                                    get_admin_new_subscription_text(
+                                        payment_id, user_id, sub_username, product_name, amount, months,
+                                        ref_id, sub_ref_username, sub_credit, purchase_source,
+                                    ),
                                     parse_mode="HTML",
                                     reply_markup=keyboard
                                 )
@@ -466,7 +475,10 @@ async def check_pending_payments():
                                 logging.error(f"Помилка при відправці повідомлення адміну про підписку: {e}")
                                 await bot.send_message(
                                     admin_chat_id,
-                                    get_admin_new_subscription_text(payment_id, user_id, sub_username, product_name, amount, months, ref_id, sub_ref_username, sub_credit),
+                                    get_admin_new_subscription_text(
+                                        payment_id, user_id, sub_username, product_name, amount, months,
+                                        ref_id, sub_ref_username, sub_credit, purchase_source,
+                                    ),
                                     parse_mode="HTML"
                                 )
                         else:
@@ -502,7 +514,8 @@ async def check_pending_payments():
                             price=amount,
                             start_date=start_date.strftime("%Y-%m-%d"),
                             end_date=end_date.strftime("%Y-%m-%d"),
-                            status="active"
+                            status="active",
+                            source=purchase_source,
                         )
                         
                         await bot.send_message(
@@ -521,7 +534,8 @@ async def check_pending_payments():
                                 admin_chat_id,
                                 get_admin_new_one_time_text(
                                     invoice_id, user_id, username, product_name, amount, months,
-                                    end_date.strftime('%d.%m.%Y'), ref_id, ref_username_one_time, credit_one_time
+                                    end_date.strftime('%d.%m.%Y'), ref_id, ref_username_one_time, credit_one_time,
+                                    purchase_source,
                                 ),
                                 parse_mode="HTML",
                                 reply_markup=keyboard
@@ -532,7 +546,8 @@ async def check_pending_payments():
                                 admin_chat_id,
                                 get_admin_new_one_time_text(
                                     invoice_id, user_id, username, product_name, amount, months,
-                                    end_date.strftime('%d.%m.%Y'), ref_id, ref_username_one_time, credit_one_time
+                                    end_date.strftime('%d.%m.%Y'), ref_id, ref_username_one_time, credit_one_time,
+                                    purchase_source,
                                 ),
                                 parse_mode="HTML"
                             )

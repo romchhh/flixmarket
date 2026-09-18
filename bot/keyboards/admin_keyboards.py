@@ -231,8 +231,13 @@ def get_admin_subscriptions_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 text="📋 Переглянути всі підписки",
-                callback_data="view_all_subscriptions"
+                callback_data="view_subs_src_all"
             )
+        ],
+        [
+            InlineKeyboardButton(text="🤖 Бот", callback_data="view_subs_src_bot"),
+            InlineKeyboardButton(text="🌐 Сайт", callback_data="view_subs_src_site"),
+            InlineKeyboardButton(text="📱 Мінідодаток", callback_data="view_subs_src_miniapp"),
         ],
         [
             InlineKeyboardButton(
@@ -249,8 +254,9 @@ def get_admin_subscriptions_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def get_admin_subscription_actions_keyboard(subscription_id: int, subscription_type: str) -> InlineKeyboardMarkup:
+def get_admin_subscription_actions_keyboard(subscription_id: int, subscription_type: str, source: str = "all") -> InlineKeyboardMarkup:
     """Клавіатура дій для конкретної підписки"""
+    back = f"view_subs_src_{source or 'all'}"
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -277,7 +283,7 @@ def get_admin_subscription_actions_keyboard(subscription_id: int, subscription_t
         [
             InlineKeyboardButton(
                 text="← Назад до списку",
-                callback_data="view_all_subscriptions"
+                callback_data=back
             )
         ]
     ])
@@ -290,10 +296,12 @@ def get_admin_subscription_list_keyboard(subscriptions: list) -> InlineKeyboardM
     for i, sub in enumerate(subscriptions[:20]):  # Обмежуємо до 20 підписок на сторінку
         status_emoji = "✅" if sub['status'] == 'active' else "❌"
         type_emoji = "🔄" if sub['type'] == 'recurring' else "💳"
+        src = (sub.get('source') or 'bot')
+        src_emoji = {"bot": "🤖", "site": "🌐", "miniapp": "📱"}.get(src, "🤖")
         
         keyboard.append([
             InlineKeyboardButton(
-                text=f"{status_emoji} {type_emoji} {sub['product_name']} - @{sub['username']}",
+                text=f"{status_emoji}{src_emoji}{type_emoji} {sub['product_name']} - @{sub['username']}",
                 callback_data=f"admin_view_{sub['type']}_{sub['id']}"
             )
         ])
@@ -312,24 +320,32 @@ def get_admin_subscription_list_keyboard(subscriptions: list) -> InlineKeyboardM
     keyboard.append([
         InlineKeyboardButton(
             text="🔄 Оновити",
-            callback_data="view_all_subscriptions"
+            callback_data="view_subs_src_all"
         )
     ])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_admin_subscription_list_keyboard_with_pagination(subscriptions: list, current_page: int, total_pages: int) -> InlineKeyboardMarkup:
+def get_admin_subscription_list_keyboard_with_pagination(
+    subscriptions: list,
+    current_page: int,
+    total_pages: int,
+    source: str = "all",
+) -> InlineKeyboardMarkup:
     """Клавіатура зі списком підписок з пагінацією"""
     keyboard = []
+    src_key = source or "all"
     
     for sub in subscriptions:
         status_emoji = "✅" if sub['status'] == 'active' else "❌"
         type_emoji = "🔄" if sub['type'] == 'recurring' else "💳"
+        src = (sub.get('source') or 'bot')
+        src_emoji = {"bot": "🤖", "site": "🌐", "miniapp": "📱"}.get(src, "🤖")
         
         keyboard.append([
             InlineKeyboardButton(
-                text=f"{status_emoji} {type_emoji} {sub['product_name']} - @{sub['username']}",
+                text=f"{status_emoji}{src_emoji}{type_emoji} {sub['product_name']} - @{sub['username']}",
                 callback_data=f"admin_view_{sub['type']}_{sub['id']}"
             )
         ])
@@ -338,20 +354,27 @@ def get_admin_subscription_list_keyboard_with_pagination(subscriptions: list, cu
     nav_buttons = []
     if current_page > 0:
         nav_buttons.append(
-            InlineKeyboardButton(text="◀️ Попередня", callback_data="prev_page")
+            InlineKeyboardButton(text="◀️ Попередня", callback_data=f"subs_page_{src_key}_{current_page - 1}")
         )
     if current_page < total_pages - 1:
         nav_buttons.append(
-            InlineKeyboardButton(text="▶️ Наступна", callback_data="next_page")
+            InlineKeyboardButton(text="▶️ Наступна", callback_data=f"subs_page_{src_key}_{current_page + 1}")
         )
     
     if nav_buttons:
         keyboard.append(nav_buttons)
+
+    keyboard.append([
+        InlineKeyboardButton(text="📋 Усі", callback_data="view_subs_src_all"),
+        InlineKeyboardButton(text="🤖", callback_data="view_subs_src_bot"),
+        InlineKeyboardButton(text="🌐", callback_data="view_subs_src_site"),
+        InlineKeyboardButton(text="📱", callback_data="view_subs_src_miniapp"),
+    ])
     
     keyboard.append([
         InlineKeyboardButton(
             text="🔄 Оновити",
-            callback_data="view_all_subscriptions"
+            callback_data=f"view_subs_src_{src_key}"
         )
     ])
     

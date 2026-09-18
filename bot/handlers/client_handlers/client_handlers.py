@@ -143,14 +143,15 @@ def site_login_subscriptions(user_id: int) -> dict:
             "startsAt": _iso_day(str(sub.get("start_date") or "")),
             "expiresAt": _iso_day(str(end), "23:59:59"),
             "status": status,
-            "source": "bot",
+            "source": sub.get("source") or "bot",
             "slug": "",
             "icon": "",
             "color": "#2B5CF6",
         })
     recurring = []
     for row in get_user_recurring_subscriptions(user_id):
-        sub_id, product_name, months, price, next_payment_date, status, payment_failures = row
+        sub_id, product_name, months, price, next_payment_date, status, payment_failures = row[:7]
+        src = row[7] if len(row) > 7 else "bot"
         status = (status or "active").lower()
         nxt = _iso_day(str(next_payment_date or ""), "keep")
         recurring.append({
@@ -166,7 +167,7 @@ def site_login_subscriptions(user_id: int) -> dict:
             "nextPaymentAt": nxt,
             "status": status,
             "paymentFailures": payment_failures,
-            "source": "bot",
+            "source": src or "bot",
             "slug": "",
             "icon": "",
             "color": "#2B5CF6",
@@ -834,6 +835,7 @@ async def pay_with_balance(callback: types.CallbackQuery):
         start_date=start_date.strftime("%Y-%m-%d"),
         end_date=end_date.strftime("%Y-%m-%d"),
         status="active",
+        source="bot",
     )
     await callback.message.edit_caption(
         caption=(
@@ -857,6 +859,7 @@ async def pay_with_balance(callback: types.CallbackQuery):
         await bot.send_message(
             admin_chat_id,
             f"{get_premium_emoji('money')} <b>Оплата з балансу</b>\n\n"
+            f"📍 Джерело: <b>🤖 Бот</b>\n"
             f"{pay_user_line}\n"
             f"Товар: {product_name}\n"
             f"Сума: {price} ₴\n"

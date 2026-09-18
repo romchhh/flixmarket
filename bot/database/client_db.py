@@ -113,12 +113,22 @@ def migrate_users_site_fields():
 
 
 def migrate_payments_source():
-    """Звідки створено платіж: bot | site."""
+    """Звідки створено платіж: bot | site | miniapp."""
     cursor.execute("PRAGMA table_info(payments)")
     columns = {column[1] for column in cursor.fetchall()}
     if "source" not in columns:
         cursor.execute("ALTER TABLE payments ADD COLUMN source TEXT DEFAULT 'bot'")
         conn.commit()
+
+
+def migrate_subscriptions_source():
+    """Звідки оформлено підписку: bot | site | miniapp."""
+    for table in ("subscriptions", "recurring_subscriptions"):
+        cursor.execute(f"PRAGMA table_info({table})")
+        columns = {column[1] for column in cursor.fetchall()}
+        if "source" not in columns:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN source TEXT DEFAULT 'bot'")
+            conn.commit()
 
 
 def enable_wal():
@@ -444,7 +454,7 @@ def update_payment_status(invoice_id: str, status: str) -> bool:
 def get_pending_payments(hours: int = 24):
     try:
         cursor.execute("""
-            SELECT invoice_id, user_id, product_id, months, amount, payment_type
+            SELECT invoice_id, user_id, product_id, months, amount, payment_type, COALESCE(source, 'bot')
             FROM payments 
             WHERE status = 'pending' 
             AND created_at >= datetime('now', ?)
@@ -465,7 +475,8 @@ def create_subscriptions_table():
             price REAL,
             start_date TEXT,
             end_date TEXT,
-            status TEXT
+            status TEXT,
+            source TEXT DEFAULT 'bot'
         )
     ''')
     conn.commit()
@@ -505,6 +516,7 @@ def create_recurring_subscriptions_table():
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             payment_failures INTEGER DEFAULT 0,
+            source TEXT DEFAULT 'bot',
             FOREIGN KEY (wallet_id) REFERENCES user_tokens(wallet_id)
         )
     ''')
@@ -580,14 +592,14 @@ def save_mono_event(invoice_id: str, status: str, payload: dict) -> None:
 
 
 def add_subscription(user_id: int, product_type: str, product_id: int, product_name: str, 
-                    price: float, start_date: str, end_date: str, status: str):
+                    price: float, start_date: str, end_date: str, status: str, source: str = "bot"):
     try:
         cursor.execute("""
             INSERT INTO subscriptions (
                 user_id, product_type, product_id, product_name, 
-                price, start_date, end_date, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, product_type, product_id, product_name, price, start_date, end_date, status))
+                price, start_date, end_date, status, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, product_type, product_id, product_name, price, start_date, end_date, status, source or "bot"))
         conn.commit()
         return True
     except sqlite3.Error as e:
@@ -766,7 +778,7 @@ def merge_site_user_to_telegram(site_user_id: int, telegram_id: int, username: s
 def get_user_subscriptions(user_id: int) -> list:
     try:
         cursor.execute("""
-            SELECT id, product_name, product_id, price, start_date, end_date, status
+            SELECT id, product_name, product_id, price, start_date, end_date, status, COALESCE(source, 'bot')
             FROM subscriptions 
             WHERE user_id = ?
             ORDER BY end_date DESC
@@ -781,7 +793,8 @@ def get_user_subscriptions(user_id: int) -> list:
                 'price': row[3],
                 'start_date': row[4],
                 'end_date': row[5],
-                'status': row[6]
+                'status': row[6],
+                'source': row[7] if len(row) > 7 else 'bot',
             })
         return subscriptions
         
@@ -847,7 +860,7 @@ def get_user_token(user_id: int) -> tuple:
 
 
 def create_recurring_subscription(user_id: int, product_id: int, product_name: str, 
-                                months: int, price: float, wallet_id: str) -> bool:
+                                months: int, price: float, wallet_id: str, source: str = "bot") -> bool:
     """Створює повторювану підписку"""
     try:
         from datetime import datetime, timedelta
@@ -856,9 +869,9 @@ def create_recurring_subscription(user_id: int, product_id: int, product_name: s
         
         cursor.execute("""
             INSERT INTO recurring_subscriptions 
-            (user_id, product_id, product_name, months, price, wallet_id, next_payment_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, product_id, product_name, months, price, wallet_id, next_payment_date))
+            (user_id, product_id, product_name, months, price, wallet_id, next_payment_date, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, product_id, product_name, months, price, wallet_id, next_payment_date, source or "bot"))
         conn.commit()
         return True
     except sqlite3.Error as e:
@@ -996,7 +1009,7 @@ def get_recurring_subscription(subscription_id: int, user_id: int | None = None)
             cursor.execute(
                 """
                 SELECT id, user_id, product_id, product_name, months, price, wallet_id,
-                       next_payment_date, status, payment_failures
+                       next_payment_date, status, payment_failures, COALESCE(source, 'bot')
                 FROM recurring_subscriptions WHERE id = ?
                 """,
                 (subscription_id,),
@@ -1005,7 +1018,7 @@ def get_recurring_subscription(subscription_id: int, user_id: int | None = None)
             cursor.execute(
                 """
                 SELECT id, user_id, product_id, product_name, months, price, wallet_id,
-                       next_payment_date, status, payment_failures
+                       next_payment_date, status, payment_failures, COALESCE(source, 'bot')
                 FROM recurring_subscriptions WHERE id = ? AND user_id = ?
                 """,
                 (subscription_id, user_id),
@@ -1024,6 +1037,7 @@ def get_recurring_subscription(subscription_id: int, user_id: int | None = None)
             "next_payment_date": row[7],
             "status": row[8],
             "payment_failures": row[9],
+            "source": row[10] if len(row) > 10 else "bot",
         }
     except sqlite3.Error as e:
         print(f"Помилка get_recurring_subscription: {e}")
@@ -1123,7 +1137,7 @@ def get_user_recurring_subscriptions(user_id: int) -> list:
     """Отримує всі підписки користувача"""
     try:
         cursor.execute("""
-            SELECT id, product_name, months, price, next_payment_date, status, payment_failures
+            SELECT id, product_name, months, price, next_payment_date, status, payment_failures, COALESCE(source, 'bot')
             FROM recurring_subscriptions 
             WHERE user_id = ?
             ORDER BY created_at DESC
@@ -1525,6 +1539,7 @@ def create_tables():
     migrate_users_marketing_link()
     migrate_users_site_fields()
     migrate_payments_source()
+    migrate_subscriptions_source()
     create_web_logins_table()
     enable_wal()
     from database.links_db import create_table_links

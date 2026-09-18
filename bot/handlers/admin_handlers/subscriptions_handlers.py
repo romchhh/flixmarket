@@ -21,12 +21,21 @@ from ulits.admin_states import SearchSubscription
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from datetime import datetime
 import logging
-from Content.texts import get_calendar_emoji_html, get_person_emoji_html, get_premium_emoji
+from Content.texts import get_calendar_emoji_html, get_person_emoji_html, get_premium_emoji, format_admin_source_line
 
 
 router = Router()
 
 current_page = 0
+current_source_filter = "all"
+
+
+SOURCE_TITLES = {
+    "all": "Усі джерела",
+    "bot": "🤖 Бот",
+    "site": "🌐 Сайт",
+    "miniapp": "📱 Мінідодаток",
+}
 
 
 @router.message(IsAdmin(), F.text.in_(["Управління підписками"]))
@@ -60,11 +69,32 @@ async def manage_subscriptions(message: types.Message):
 
 
 @router.callback_query(F.data == "view_all_subscriptions")
+@router.callback_query(F.data.startswith("view_subs_src_"))
 async def view_all_subscriptions(callback: types.CallbackQuery):
-    global current_page
+    global current_page, current_source_filter
     current_page = 0
+    if callback.data.startswith("view_subs_src_"):
+        current_source_filter = callback.data.replace("view_subs_src_", "", 1) or "all"
+    else:
+        current_source_filter = "all"
     await callback.answer()
-    await view_all_subscriptions_with_page(callback, current_page)
+    await view_all_subscriptions_with_page(callback, current_page, current_source_filter)
+
+
+@router.callback_query(F.data.startswith("subs_page_"))
+async def subscriptions_page(callback: types.CallbackQuery):
+    global current_page, current_source_filter
+    # subs_page_{source}_{page}
+    parts = callback.data.split("_")
+    # ["subs", "page", source, page] — source may be "all"|"bot"|"site"|"miniapp"
+    if len(parts) >= 4:
+        current_source_filter = parts[2]
+        try:
+            current_page = int(parts[3])
+        except ValueError:
+            current_page = 0
+    await callback.answer()
+    await view_all_subscriptions_with_page(callback, current_page, current_source_filter)
 
 
 @router.callback_query(F.data.startswith("admin_view_"))
@@ -88,6 +118,7 @@ async def admin_view_subscription(callback: types.CallbackQuery):
             details[5],
             details[6],
         )
+        source = details[8] if len(details) > 8 else "bot"
 
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -95,6 +126,7 @@ async def admin_view_subscription(callback: types.CallbackQuery):
         user_line = f"{get_person_emoji_html()} <b>Користувач:</b> @{username} (ID: {user_id})" if (username and str(username).strip()) else f"{get_person_emoji_html()} <b>Користувач:</b> ID {user_id} (прихований профіль)"
         details_text = (
             f"📄 <b>Одноразова підписка #{subscription_id}</b>\n\n"
+            f"{format_admin_source_line(source)}\n"
             f"{user_line}\n"
             f"🏷️ <b>Продукт:</b> {product_name}\n"
             f"{get_premium_emoji('money')} <b>Сума:</b> {price}₴\n"
@@ -123,6 +155,7 @@ async def admin_view_subscription(callback: types.CallbackQuery):
             details[6],
             details[7],
         )
+        source = details[9] if len(details) > 9 else "bot"
 
         next_payment_dt = datetime.strptime(
             next_payment_date, "%Y-%m-%d %H:%M:%S"
@@ -130,6 +163,7 @@ async def admin_view_subscription(callback: types.CallbackQuery):
         user_line_rec = f"{get_person_emoji_html()} <b>Користувач:</b> @{username} (ID: {user_id})" if (username and str(username).strip()) else f"{get_person_emoji_html()} <b>Користувач:</b> ID {user_id} (прихований профіль)"
         details_text = (
             f"🔄 <b>Повторювана підписка #{subscription_id}</b>\n\n"
+            f"{format_admin_source_line(source)}\n"
             f"{user_line_rec}\n"
             f"🏷️ <b>Продукт:</b> {product_name}\n"
             f"{get_premium_emoji('money')} <b>Сума:</b> {price}₴\n"
@@ -143,7 +177,7 @@ async def admin_view_subscription(callback: types.CallbackQuery):
         details_text,
         parse_mode="HTML",
         reply_markup=get_admin_subscription_actions_keyboard(
-            subscription_id, subscription_type
+            subscription_id, subscription_type, current_source_filter
         ),
     )
 
@@ -368,30 +402,34 @@ async def search_subscription_process(message: types.Message, state: FSMContext)
 
 @router.callback_query(F.data == "prev_page")
 async def prev_page_subscriptions(callback: types.CallbackQuery):
-    global current_page
+    global current_page, current_source_filter
     await callback.answer()
     if current_page > 0:
         current_page -= 1
-    await view_all_subscriptions_with_page(callback, current_page)
+    await view_all_subscriptions_with_page(callback, current_page, current_source_filter)
 
 
 @router.callback_query(F.data == "next_page")
 async def next_page_subscriptions(callback: types.CallbackQuery):
-    global current_page
+    global current_page, current_source_filter
     await callback.answer()
     current_page += 1
-    await view_all_subscriptions_with_page(callback, current_page)
+    await view_all_subscriptions_with_page(callback, current_page, current_source_filter)
 
 
 async def view_all_subscriptions_with_page(
-    callback: types.CallbackQuery, page: int = 0
+    callback: types.CallbackQuery, page: int = 0, source: str = "all"
 ):
-    subscriptions = get_all_subscriptions_for_admin()
+    global current_source_filter
+    current_source_filter = source or "all"
+    source_arg = None if current_source_filter in ("all", "") else current_source_filter
+    subscriptions = get_all_subscriptions_for_admin(source_arg)
 
     if not subscriptions:
         await callback.message.edit_text(
             "📋 <b>Управління підписками</b>\n\n"
-            "Підписок поки немає.",
+            f"Фільтр: {SOURCE_TITLES.get(current_source_filter, current_source_filter)}\n\n"
+            "Підписок за цим джерелом немає.",
             parse_mode="HTML",
             reply_markup=get_admin_subscriptions_keyboard(),
         )
@@ -405,18 +443,18 @@ async def view_all_subscriptions_with_page(
     if not page_subscriptions and page > 0:
         global current_page
         current_page = page - 1
-        await view_all_subscriptions_with_page(callback, current_page)
+        await view_all_subscriptions_with_page(callback, current_page, current_source_filter)
         return
 
     total_pages = (len(subscriptions) + items_per_page - 1) // items_per_page
 
     list_text = (
-        f"📋 <b>Всі підписки ({len(subscriptions)})</b>\n"
+        f"📋 <b>Підписки ({len(subscriptions)})</b>\n"
+        f"📍 {SOURCE_TITLES.get(current_source_filter, current_source_filter)}\n"
         f"📄 Сторінка {page + 1} з {total_pages}\n\n"
-        f"🔄 - Повторювана підписка\n"
-        f"{get_premium_emoji('card')} - Одноразова оплата\n"
-        f"{get_premium_emoji('check')} - Активна\n"
-        f"❌ - Неактивна\n\n"
+        f"🤖 Бот · 🌐 Сайт · 📱 Мінідодаток\n"
+        f"🔄 Повторювана · {get_premium_emoji('card')} Одноразова\n"
+        f"{get_premium_emoji('check')} Активна · ❌ Неактивна\n\n"
         f"Натисніть на підписку для детального перегляду:"
     )
 
@@ -427,6 +465,7 @@ async def view_all_subscriptions_with_page(
             page_subscriptions,
             page,
             total_pages,
+            current_source_filter,
         ),
     )
 

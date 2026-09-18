@@ -264,18 +264,32 @@ def get_admin_subscriptions_stats():
         return {}
 
 
-def get_all_subscriptions_for_admin():
-    """Отримує всі підписки для адміна"""
+def get_all_subscriptions_for_admin(source: str | None = None):
+    """Отримує всі підписки для адміна. source: None/all | bot | site | miniapp"""
     try:
         subscriptions = []
+        source_filter = (source or "").strip().lower()
+        if source_filter in ("", "all", "none"):
+            source_filter = None
         
         # Звичайні підписки
-        cursor.execute("""
-            SELECT s.id, s.user_id, s.product_name, s.price, s.start_date, s.end_date, s.status, u.user_name
-            FROM subscriptions s
-            LEFT JOIN users u ON s.user_id = u.user_id
-            ORDER BY s.start_date DESC
-        """)
+        if source_filter:
+            cursor.execute("""
+                SELECT s.id, s.user_id, s.product_name, s.price, s.start_date, s.end_date, s.status, u.user_name,
+                       COALESCE(s.source, 'bot')
+                FROM subscriptions s
+                LEFT JOIN users u ON s.user_id = u.user_id
+                WHERE COALESCE(s.source, 'bot') = ?
+                ORDER BY s.start_date DESC
+            """, (source_filter,))
+        else:
+            cursor.execute("""
+                SELECT s.id, s.user_id, s.product_name, s.price, s.start_date, s.end_date, s.status, u.user_name,
+                       COALESCE(s.source, 'bot')
+                FROM subscriptions s
+                LEFT JOIN users u ON s.user_id = u.user_id
+                ORDER BY s.start_date DESC
+            """)
         
         for row in cursor.fetchall():
             subscriptions.append({
@@ -289,16 +303,28 @@ def get_all_subscriptions_for_admin():
                 'status': row[6],
                 'username': row[7] or 'Невідомо',
                 'next_payment_date': None,
-                'payment_failures': 0
+                'payment_failures': 0,
+                'source': row[8] if len(row) > 8 else 'bot',
             })
         
         # Повторювані підписки
-        cursor.execute("""
-            SELECT rs.id, rs.user_id, rs.product_name, rs.price, rs.months, rs.next_payment_date, rs.status, rs.payment_failures, u.user_name
-            FROM recurring_subscriptions rs
-            LEFT JOIN users u ON rs.user_id = u.user_id
-            ORDER BY rs.created_at DESC
-        """)
+        if source_filter:
+            cursor.execute("""
+                SELECT rs.id, rs.user_id, rs.product_name, rs.price, rs.months, rs.next_payment_date, rs.status,
+                       rs.payment_failures, u.user_name, COALESCE(rs.source, 'bot'), rs.created_at
+                FROM recurring_subscriptions rs
+                LEFT JOIN users u ON rs.user_id = u.user_id
+                WHERE COALESCE(rs.source, 'bot') = ?
+                ORDER BY rs.created_at DESC
+            """, (source_filter,))
+        else:
+            cursor.execute("""
+                SELECT rs.id, rs.user_id, rs.product_name, rs.price, rs.months, rs.next_payment_date, rs.status,
+                       rs.payment_failures, u.user_name, COALESCE(rs.source, 'bot'), rs.created_at
+                FROM recurring_subscriptions rs
+                LEFT JOIN users u ON rs.user_id = u.user_id
+                ORDER BY rs.created_at DESC
+            """)
         
         for row in cursor.fetchall():
             subscriptions.append({
@@ -313,9 +339,17 @@ def get_all_subscriptions_for_admin():
                 'payment_failures': row[7],
                 'username': row[8] or 'Невідомо',
                 'start_date': None,
-                'end_date': None
+                'end_date': None,
+                'source': row[9] if len(row) > 9 else 'bot',
+                'created_at': row[10] if len(row) > 10 else None,
             })
-        
+
+        # Єдине сортування: спочатку новіші (recurring created_at / simple start_date)
+        def _sort_key(item):
+            raw = item.get('created_at') or item.get('start_date') or item.get('next_payment_date') or ''
+            return str(raw)
+
+        subscriptions.sort(key=_sort_key, reverse=True)
         return subscriptions
         
     except sqlite3.Error as e:
@@ -348,7 +382,8 @@ def search_subscriptions_for_admin(query: str):
                 'status': row[6],
                 'username': row[7] or 'Невідомо',
                 'next_payment_date': None,
-                'payment_failures': 0
+                'payment_failures': 0,
+                'source': row[8] if len(row) > 8 else 'bot',
             })
         
         def add_recurring(row):
@@ -368,13 +403,15 @@ def search_subscriptions_for_admin(query: str):
                 'payment_failures': row[7],
                 'username': row[8] or 'Невідомо',
                 'start_date': None,
-                'end_date': None
+                'end_date': None,
+                'source': row[9] if len(row) > 9 else 'bot',
             })
         
         if query.strip().isdigit():
             user_id = int(query.strip())
             cursor.execute("""
-                SELECT s.id, s.user_id, s.product_name, s.price, s.start_date, s.end_date, s.status, u.user_name
+                SELECT s.id, s.user_id, s.product_name, s.price, s.start_date, s.end_date, s.status, u.user_name,
+                       COALESCE(s.source, 'bot')
                 FROM subscriptions s
                 LEFT JOIN users u ON s.user_id = u.user_id
                 WHERE s.user_id = ?
@@ -383,7 +420,8 @@ def search_subscriptions_for_admin(query: str):
             for row in cursor.fetchall():
                 add_simple(row)
             cursor.execute("""
-                SELECT rs.id, rs.user_id, rs.product_name, rs.price, rs.months, rs.next_payment_date, rs.status, rs.payment_failures, u.user_name
+                SELECT rs.id, rs.user_id, rs.product_name, rs.price, rs.months, rs.next_payment_date, rs.status, rs.payment_failures, u.user_name,
+                       COALESCE(rs.source, 'bot')
                 FROM recurring_subscriptions rs
                 LEFT JOIN users u ON rs.user_id = u.user_id
                 WHERE rs.user_id = ?
@@ -393,7 +431,8 @@ def search_subscriptions_for_admin(query: str):
                 add_recurring(row)
         
         cursor.execute("""
-            SELECT s.id, s.user_id, s.product_name, s.price, s.start_date, s.end_date, s.status, u.user_name
+            SELECT s.id, s.user_id, s.product_name, s.price, s.start_date, s.end_date, s.status, u.user_name,
+                   COALESCE(s.source, 'bot')
             FROM subscriptions s
             LEFT JOIN users u ON s.user_id = u.user_id
             WHERE u.user_name LIKE ? OR s.product_name LIKE ?
@@ -403,7 +442,8 @@ def search_subscriptions_for_admin(query: str):
             add_simple(row)
         
         cursor.execute("""
-            SELECT rs.id, rs.user_id, rs.product_name, rs.price, rs.months, rs.next_payment_date, rs.status, rs.payment_failures, u.user_name
+            SELECT rs.id, rs.user_id, rs.product_name, rs.price, rs.months, rs.next_payment_date, rs.status, rs.payment_failures, u.user_name,
+                   COALESCE(rs.source, 'bot')
             FROM recurring_subscriptions rs
             LEFT JOIN users u ON rs.user_id = u.user_id
             WHERE u.user_name LIKE ? OR rs.product_name LIKE ?
@@ -417,7 +457,8 @@ def search_subscriptions_for_admin(query: str):
             cursor.execute("SELECT id FROM subscriptions WHERE id = ?", (sub_id,))
             if cursor.fetchone():
                 cursor.execute("""
-                    SELECT s.id, s.user_id, s.product_name, s.price, s.start_date, s.end_date, s.status, u.user_name
+                    SELECT s.id, s.user_id, s.product_name, s.price, s.start_date, s.end_date, s.status, u.user_name,
+                           COALESCE(s.source, 'bot')
                     FROM subscriptions s
                     LEFT JOIN users u ON s.user_id = u.user_id
                     WHERE s.id = ?
@@ -428,7 +469,8 @@ def search_subscriptions_for_admin(query: str):
             cursor.execute("SELECT id FROM recurring_subscriptions WHERE id = ?", (sub_id,))
             if cursor.fetchone():
                 cursor.execute("""
-                    SELECT rs.id, rs.user_id, rs.product_name, rs.price, rs.months, rs.next_payment_date, rs.status, rs.payment_failures, u.user_name
+                    SELECT rs.id, rs.user_id, rs.product_name, rs.price, rs.months, rs.next_payment_date, rs.status, rs.payment_failures, u.user_name,
+                           COALESCE(rs.source, 'bot')
                     FROM recurring_subscriptions rs
                     LEFT JOIN users u ON rs.user_id = u.user_id
                     WHERE rs.id = ?
@@ -449,14 +491,16 @@ def get_subscription_details(subscription_id: int, subscription_type: str):
     try:
         if subscription_type == 'simple':
             cursor.execute("""
-                SELECT s.id, s.user_id, s.product_name, s.price, s.start_date, s.end_date, s.status, u.user_name
+                SELECT s.id, s.user_id, s.product_name, s.price, s.start_date, s.end_date, s.status, u.user_name,
+                       COALESCE(s.source, 'bot')
                 FROM subscriptions s
                 LEFT JOIN users u ON s.user_id = u.user_id
                 WHERE s.id = ?
             """, (subscription_id,))
         else:  # recurring
             cursor.execute("""
-                SELECT rs.id, rs.user_id, rs.product_name, rs.price, rs.months, rs.next_payment_date, rs.status, rs.payment_failures, u.user_name
+                SELECT rs.id, rs.user_id, rs.product_name, rs.price, rs.months, rs.next_payment_date, rs.status,
+                       rs.payment_failures, u.user_name, COALESCE(rs.source, 'bot')
                 FROM recurring_subscriptions rs
                 LEFT JOIN users u ON rs.user_id = u.user_id
                 WHERE rs.id = ?
