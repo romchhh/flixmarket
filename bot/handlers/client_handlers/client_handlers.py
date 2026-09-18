@@ -1,6 +1,6 @@
 from aiogram import Router, types, F
 from aiogram.types import FSInputFile, InputMediaPhoto, InlineKeyboardButton, InlineKeyboardMarkup
-from config import administrators, token as BOT_TOKEN, SITE_URL, WEB_SITE_URL, admin_chat_id, MIN_WITHDRAWAL, CATALOG_IMAGE_PATH
+from config import administrators, token as BOT_TOKEN, normalize_bot_token, SITE_URL, WEB_SITE_URL, admin_chat_id, MIN_WITHDRAWAL, CATALOG_IMAGE_PATH
 from main import bot, scheduler
 from aiogram.filters import Command, CommandObject
 from keyboards.client_keyboards import get_start_keyboard, get_socials_keyboard, get_manager_keyboard, get_catalog_keyboard, get_products_keyboard, get_product_info_keyboard, get_payment_keyboard, get_payment_choice_keyboard, get_profile_keyboard, get_back_to_profile_keyboard, get_referral_keyboard, get_contest_keyboard
@@ -97,7 +97,7 @@ def signed_site_payload(telegram_id: int, username, extra: dict) -> dict:
     if username:
         data["username"] = username.lstrip("@")
     dcs = "\n".join(f"{k}={data[k]}" for k in sorted(data))
-    secret = hashlib.sha256(BOT_TOKEN.encode()).digest()
+    secret = hashlib.sha256(normalize_bot_token(BOT_TOKEN).encode()).digest()
     data["hash"] = hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest()
     return data
 

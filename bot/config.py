@@ -7,7 +7,11 @@ load_dotenv(os.path.join(PROJECT_ROOT, '.env'))
 
 DB_PATH = os.getenv('DATABASE_PATH') or os.path.join(PROJECT_ROOT, 'database', 'data.db')
 
-token = os.getenv('BOT_TOKEN', '')
+def normalize_bot_token(raw: str | None) -> str:
+    return (raw or '').strip().strip('"').strip("'")
+
+
+token = normalize_bot_token(os.getenv('BOT_TOKEN', ''))
 administrators = [int(x.strip()) for x in os.getenv('ADMIN_IDS', '').split(',') if x.strip()]
 # ID групи для повідомлень про оплати (бот має бути доданий у групу). Без пробілів.
 _admin_chat_id_raw = (os.getenv('ADMIN_CHAT_ID') or '').strip()
