@@ -7,6 +7,7 @@ from keyboards.admin_keyboards import (
     get_admin_subscription_list_keyboard_with_pagination,
     get_admin_subscription_actions_keyboard,
     get_confirm_run_payments_keyboard,
+    get_confirm_charge_recurring_keyboard,
 )
 from database.admin_db import (
     get_admin_subscriptions_stats,
@@ -468,6 +469,89 @@ async def view_all_subscriptions_with_page(
             current_source_filter,
         ),
     )
+
+
+@router.callback_query(F.data.regexp(r"^admin_charge_recurring_\d+$"))
+async def admin_charge_recurring_prompt(callback: types.CallbackQuery):
+    subscription_id = int(callback.data.split("_")[-1])
+    details = get_subscription_details(subscription_id, "recurring")
+
+    if not details:
+        await callback.answer("Підписка не знайдена", show_alert=True)
+        return
+
+    product_name = details[2]
+    price = details[3]
+    status = details[6]
+
+    if status != "active":
+        await callback.answer("Підписка неактивна — списання неможливе", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        f"⚠️ <b>Підтвердження списання</b>\n\n"
+        f"Підписка: <b>#{subscription_id}</b>\n"
+        f"Продукт: <b>{product_name}</b>\n"
+        f"Сума: <b>{price}₴</b>\n\n"
+        f"Буде виконано тестове списання по збереженому токену картки.\n"
+        f"Продовжити?",
+        parse_mode="HTML",
+        reply_markup=get_confirm_charge_recurring_keyboard(subscription_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_charge_cancel_recurring_"))
+async def admin_charge_recurring_cancel(callback: types.CallbackQuery):
+    subscription_id = int(callback.data.split("_")[-1])
+    callback.data = f"admin_view_recurring_{subscription_id}"
+    await admin_view_subscription(callback)
+
+
+@router.callback_query(F.data.startswith("admin_charge_confirm_recurring_"))
+async def admin_charge_recurring_execute(callback: types.CallbackQuery):
+    from ulits.cron_functions import charge_recurring_subscription_by_id
+
+    subscription_id = int(callback.data.split("_")[-1])
+
+    await callback.message.edit_text(
+        f"💳 <b>Списання підписки #{subscription_id}...</b>\n\n"
+        f"⏳ Зачекайте, перевіряю токен і створюю платіж...",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+    result = await charge_recurring_subscription_by_id(subscription_id)
+
+    if result.get("ok"):
+        invoice_id = result.get("invoice_id", "—")
+        await callback.message.edit_text(
+            f"✅ <b>Списання успішне!</b>\n\n"
+            f"Підписка: <b>#{subscription_id}</b>\n"
+            f"Invoice: <code>{invoice_id}</code>\n"
+            f"{get_calendar_emoji_html()} <b>Час:</b> {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}",
+            parse_mode="HTML",
+            reply_markup=get_admin_subscription_actions_keyboard(
+                subscription_id, "recurring", current_source_filter
+            ),
+        )
+        return
+
+    error = result.get("error", "Невідома помилка")
+    invoice_id = result.get("invoice_id")
+    invoice_line = f"\nInvoice: <code>{invoice_id}</code>" if invoice_id else ""
+
+    await callback.message.edit_text(
+        f"❌ <b>Списання не вдалося</b>\n\n"
+        f"Підписка: <b>#{subscription_id}</b>{invoice_line}\n"
+        f"Помилка: <code>{error}</code>\n"
+        f"{get_calendar_emoji_html()} <b>Час:</b> {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}",
+        parse_mode="HTML",
+        reply_markup=get_admin_subscription_actions_keyboard(
+            subscription_id, "recurring", current_source_filter
+        ),
+    )
+    await callback.answer(f"❌ {error}", show_alert=True)
 
 
 @router.callback_query(F.data == "confirm_run_payments")

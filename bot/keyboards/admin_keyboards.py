@@ -257,7 +257,7 @@ def get_admin_subscriptions_keyboard() -> InlineKeyboardMarkup:
 def get_admin_subscription_actions_keyboard(subscription_id: int, subscription_type: str, source: str = "all") -> InlineKeyboardMarkup:
     """Клавіатура дій для конкретної підписки"""
     back = f"view_subs_src_{source or 'all'}"
-    return InlineKeyboardMarkup(inline_keyboard=[
+    keyboard = [
         [
             InlineKeyboardButton(
                 text="✅ Активувати",
@@ -284,6 +284,32 @@ def get_admin_subscription_actions_keyboard(subscription_id: int, subscription_t
             InlineKeyboardButton(
                 text="← Назад до списку",
                 callback_data=back
+            )
+        ]
+    ]
+
+    if subscription_type == "recurring":
+        keyboard.insert(1, [
+            InlineKeyboardButton(
+                text="💳 Списати зараз",
+                callback_data=f"admin_charge_recurring_{subscription_id}"
+            )
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_confirm_charge_recurring_keyboard(subscription_id: int) -> InlineKeyboardMarkup:
+    """Підтвердження ручного списання повторюваної підписки"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Так, списати",
+                callback_data=f"admin_charge_confirm_recurring_{subscription_id}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Скасувати",
+                callback_data=f"admin_charge_cancel_recurring_{subscription_id}"
             )
         ]
     ])

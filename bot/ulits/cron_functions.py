@@ -126,342 +126,376 @@ async def check_expiring_subscriptions():
         print(f"Помилка при перевірці підписок: {e}")
 
 
+async def _process_single_recurring_subscription(subscription, payment_manager: PaymentManager | None = None) -> dict:
+    """Обробляє одне повторюване списання. Повертає {ok, message?, error?, invoice_id?, status?}."""
+    if payment_manager is None:
+        payment_manager = PaymentManager()
+
+    subscription_id, user_id, product_id, product_name, months, price, wallet_id, next_payment_date = subscription
+    logging.info(f"💳 Обробка підписки {subscription_id} для користувача {user_id} ({product_name})")
+
+    try:
+        logging.info(f"🔑 Отримання токену картки для користувача {user_id}")
+        token_data = get_user_token(user_id)
+        if not token_data:
+            logging.error(f"❌ Токен не знайдено для користувача {user_id}")
+            await handle_recurring_payment_failure(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                product_name=product_name,
+                failure_reason="Токен картки не знайдено",
+            )
+            return {"ok": False, "error": "Токен картки не знайдено"}
+
+        wallet_id_db, card_token, masked_card, card_type = token_data
+        logging.info(f"✅ Токен знайдено: wallet_id={wallet_id_db}, masked_card={masked_card}, card_type={card_type}")
+
+        logging.info(f"💳 Створення платежу по токену для підписки {subscription_id}")
+        try:
+            local_payment_id, invoice_id = payment_manager.create_token_payment(
+                wallet_id=wallet_id_db,
+                card_token=card_token,
+                product_name=product_name,
+                months=months,
+                price=price
+            )
+            logging.info(f"✅ Платіж створено: local_payment_id={local_payment_id}, invoice_id={invoice_id}")
+        except Exception as payment_error:
+            error_message = str(payment_error)
+            logging.error(f"❌ Помилка створення платежу для підписки {subscription_id}: {error_message}")
+
+            err_code = None
+            err_text = None
+
+            try:
+                import json
+                if 'errCode' in error_message or 'errText' in error_message:
+                    if '{' in error_message:
+                        json_start = error_message.find('{')
+                        json_end = error_message.rfind('}') + 1
+                        if json_start < json_end:
+                            error_json = json.loads(error_message[json_start:json_end])
+                            err_code = error_json.get('errCode')
+                            err_text = error_json.get('errText', error_message)
+            except Exception:
+                pass
+
+            if not err_code:
+                err_code = 'UNKNOWN_ERROR'
+                err_text = error_message
+
+            logging.warning(f"📋 Код помилки: {err_code}, Текст: {err_text}")
+
+            save_subscription_payment(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                amount=price,
+                status='failed',
+                invoice_id=None,
+                payment_id=None,
+                error_message=f"{err_code}: {err_text}"
+            )
+
+            if err_code == 'TOKEN_NOT_FOUND':
+                logging.error(f"🚫 Токен картки не знайдено для підписки {subscription_id}. Деактивуємо підписку.")
+                deactivate_subscription(subscription_id)
+                await notify_user_token_invalid(
+                    user_id, product_name, masked_card, err_text,
+                    source=_subscription_source(subscription_id),
+                )
+            else:
+                await handle_recurring_payment_failure(
+                    subscription_id=subscription_id,
+                    user_id=user_id,
+                    product_name=product_name,
+                    masked_card=masked_card,
+                    failure_reason=err_text,
+                )
+
+            return {"ok": False, "error": f"{err_code}: {err_text}"}
+
+        await asyncio.sleep(2)
+
+        max_attempts = 5
+        attempt = 0
+        payment_status = None
+
+        while attempt < max_attempts:
+            attempt += 1
+            logging.info(f"🔍 Перевірка статусу платежу {invoice_id} (спроба {attempt}/{max_attempts})")
+
+            try:
+                payment_status = payment_manager.get_payment_status(invoice_id)
+                current_status = payment_status.get('status')
+                modified_date = payment_status.get('modifiedDate')
+
+                logging.info(f"📊 Статус платежу: {current_status}, modifiedDate: {modified_date}")
+
+                if current_status in ['success', 'failure', 'expired']:
+                    break
+                elif current_status == 'processing':
+                    if attempt < max_attempts:
+                        wait_time = min(5 * attempt, 30)
+                        logging.info(f"⏳ Платіж в обробці, чекаємо {wait_time} секунд перед наступною перевіркою")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        break
+                else:
+                    logging.warning(f"❓ Невідомий статус: {current_status}")
+                    break
+
+            except Exception as e:
+                logging.error(f"❌ Помилка при перевірці статусу платежу: {e}")
+                if attempt < max_attempts:
+                    await asyncio.sleep(5)
+                else:
+                    raise
+
+        if not payment_status:
+            error_text = f"Не вдалося отримати статус після {max_attempts} спроб"
+            logging.error(f"❌ Не вдалося отримати статус платежу {invoice_id} після {max_attempts} спроб")
+            save_subscription_payment(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                amount=price,
+                status='error',
+                invoice_id=invoice_id,
+                payment_id=local_payment_id,
+                error_message=error_text
+            )
+            await handle_recurring_payment_failure(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                product_name=product_name,
+                invoice_id=invoice_id,
+                failure_reason=error_text,
+                notify=False,
+            )
+            return {"ok": False, "error": error_text, "invoice_id": invoice_id}
+
+        payment_info = payment_status.get('paymentInfo', {})
+        status_masked_card = payment_info.get('maskedPan') or masked_card
+        status_card_type = payment_info.get('paymentSystem', card_type)
+        modified_date = payment_status.get('modifiedDate')
+
+        logging.info(f"💳 Дані платежу: invoice_id={invoice_id}, masked_card={status_masked_card}, card_type={status_card_type}")
+        logging.info(f"🔑 Токен картки (частково): {card_token[:8] + '...' + card_token[-4:] if card_token and len(card_token) > 12 else 'N/A'}")
+        logging.info(f"📅 ModifiedDate: {modified_date}")
+
+        current_status = payment_status.get('status')
+
+        if current_status == 'success':
+            logging.info(f"✅ Успішний платіж для підписки {subscription_id}")
+            save_subscription_payment(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                amount=price,
+                status='success',
+                invoice_id=invoice_id,
+                payment_id=local_payment_id
+            )
+
+            logging.info(f"📅 Оновлення дати наступного платежу для підписки {subscription_id}")
+            update_subscription_next_payment(subscription_id, months)
+            reset_payment_failures(subscription_id)
+            track_link_purchase(user_id)
+
+            ref_id = get_ref_id_by_user(user_id)
+            if ref_id:
+                add_partner_credit(
+                    partner_id=ref_id,
+                    buyer_id=user_id,
+                    purchase_amount=price,
+                    product_name=product_name,
+                    payment_type="subscription",
+                )
+                credit_amount = round(price * (get_partner_referral_percent() / 100), 1)
+                if credit_amount > 0:
+                    buyer_username = get_username_by_id(user_id)
+                    buyer_line = f"@{buyer_username}" if (buyer_username and str(buyer_username).strip()) else f"користувач (ID: {user_id}, прихований профіль)"
+                    try:
+                        await bot.send_message(
+                            ref_id,
+                            get_partner_referral_purchase_text(buyer_line, product_name, price, credit_amount),
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+
+            logging.info(f"📱 Відправка повідомлення користувачу {user_id} про успішний платіж")
+            await notify_user_payment_success(
+                user_id=user_id,
+                product_name=product_name,
+                amount=price,
+                months=months,
+                invoice_id=invoice_id,
+                masked_card=status_masked_card,
+                card_token=card_token,
+                source=_subscription_source(subscription_id),
+            )
+
+            logging.info(f"✅ Успішний платіж для підписки {subscription_id}, користувач {user_id}, invoice_id={invoice_id}")
+            return {
+                "ok": True,
+                "message": f"Платіж успішний. Invoice: {invoice_id}",
+                "invoice_id": invoice_id,
+                "status": "success",
+            }
+
+        elif current_status == 'processing':
+            logging.warning(f"⏳ Платіж {invoice_id} для підписки {subscription_id} все ще в обробці після {max_attempts} спроб")
+            save_subscription_payment(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                amount=price,
+                status='processing',
+                invoice_id=invoice_id,
+                payment_id=local_payment_id
+            )
+            logging.info(f"⏳ Платіж {invoice_id} залишається в обробці, дата наступного платежу НЕ оновлена")
+            return {
+                "ok": False,
+                "error": "Платіж все ще в обробці",
+                "invoice_id": invoice_id,
+                "status": "processing",
+            }
+
+        elif current_status == 'failure':
+            failure_reason = payment_status.get('failureReason', 'Невідома помилка')
+            logging.warning(f"❌ Невдалий платіж для підписки {subscription_id}: {failure_reason}")
+
+            save_subscription_payment(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                amount=price,
+                status='failed',
+                invoice_id=invoice_id,
+                payment_id=local_payment_id,
+                error_message=failure_reason
+            )
+
+            await handle_recurring_payment_failure(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                product_name=product_name,
+                masked_card=status_masked_card,
+                invoice_id=invoice_id,
+                card_token=card_token,
+                failure_reason=failure_reason,
+            )
+            return {
+                "ok": False,
+                "error": failure_reason,
+                "invoice_id": invoice_id,
+                "status": "failure",
+            }
+
+        elif current_status == 'expired':
+            logging.warning(f"⏰ Рахунок {invoice_id} для підписки {subscription_id} застарів")
+            save_subscription_payment(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                amount=price,
+                status='failed',
+                invoice_id=invoice_id,
+                payment_id=local_payment_id,
+                error_message='Рахунок застарів'
+            )
+            await handle_recurring_payment_failure(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                product_name=product_name,
+                masked_card=status_masked_card,
+                invoice_id=invoice_id,
+                card_token=card_token,
+                failure_reason='Рахунок застарів',
+            )
+            return {
+                "ok": False,
+                "error": "Рахунок застарів",
+                "invoice_id": invoice_id,
+                "status": "expired",
+            }
+
+        else:
+            error_text = f"Невідомий статус: {current_status}"
+            logging.warning(f"❓ Невідомий статус платежу: {current_status}")
+            save_subscription_payment(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                amount=price,
+                status='error',
+                invoice_id=invoice_id,
+                payment_id=local_payment_id,
+                error_message=error_text
+            )
+            await handle_recurring_payment_failure(
+                subscription_id=subscription_id,
+                user_id=user_id,
+                product_name=product_name,
+                masked_card=status_masked_card,
+                invoice_id=invoice_id,
+                failure_reason=error_text,
+            )
+            return {
+                "ok": False,
+                "error": error_text,
+                "invoice_id": invoice_id,
+                "status": current_status,
+            }
+
+    except Exception as e:
+        logging.error(f"💥 Помилка при обробці підписки {subscription_id}: {e}")
+        save_subscription_payment(
+            subscription_id=subscription_id,
+            user_id=user_id,
+            amount=price,
+            status='error',
+            error_message=str(e)
+        )
+        await handle_recurring_payment_failure(
+            subscription_id=subscription_id,
+            user_id=user_id,
+            product_name=product_name,
+            failure_reason=str(e),
+            notify=False,
+        )
+        return {"ok": False, "error": str(e)}
+
+
+async def charge_recurring_subscription_by_id(subscription_id: int) -> dict:
+    """Ручне списання однієї повторюваної підписки (для адмін-панелі)."""
+    sub = get_recurring_subscription(subscription_id)
+    if not sub:
+        return {"ok": False, "error": "Підписка не знайдена"}
+    if sub.get("status") != "active":
+        return {"ok": False, "error": f"Підписка неактивна (статус: {sub.get('status')})"}
+
+    subscription = (
+        sub["id"],
+        sub["user_id"],
+        sub["product_id"],
+        sub["product_name"],
+        sub["months"],
+        sub["price"],
+        sub["wallet_id"],
+        sub["next_payment_date"],
+    )
+    return await _process_single_recurring_subscription(subscription)
+
+
 async def process_recurring_payments():
     try:
         logging.info("🔄 Початок обробки повторюваних платежів")
         payment_manager = PaymentManager()
         subscriptions = get_active_recurring_subscriptions()
         logging.info(f"📋 Знайдено {len(subscriptions)} активних повторюваних підписок")
-        print(subscriptions)
-        
+
         for subscription in subscriptions:
-            subscription_id, user_id, product_id, product_name, months, price, wallet_id, next_payment_date = subscription
-            logging.info(f"💳 Обробка підписки {subscription_id} для користувача {user_id} ({product_name})")
-            
-            try:
-                # Отримуємо токен картки користувача
-                logging.info(f"🔑 Отримання токену картки для користувача {user_id}")
-                token_data = get_user_token(user_id)
-                if not token_data:
-                    logging.error(f"❌ Токен не знайдено для користувача {user_id}")
-                    await handle_recurring_payment_failure(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        product_name=product_name,
-                        failure_reason="Токен картки не знайдено",
-                    )
-                    continue
-                
-                wallet_id_db, card_token, masked_card, card_type = token_data
-                logging.info(f"✅ Токен знайдено: wallet_id={wallet_id_db}, masked_card={masked_card}, card_type={card_type}")
-                
-                # Створюємо платіж по токену
-                logging.info(f"💳 Створення платежу по токену для підписки {subscription_id}")
-                try:
-                    local_payment_id, invoice_id = payment_manager.create_token_payment(
-                        wallet_id=wallet_id_db,
-                        card_token=card_token,
-                        product_name=product_name,
-                        months=months,
-                        price=price
-                    )
-                    logging.info(f"✅ Платіж створено: local_payment_id={local_payment_id}, invoice_id={invoice_id}")
-                except Exception as payment_error:
-                    # Обробляємо помилки створення платежу
-                    error_message = str(payment_error)
-                    logging.error(f"❌ Помилка створення платежу для підписки {subscription_id}: {error_message}")
-                    
-                    # Парсимо помилку з JSON, якщо вона є
-                    err_code = None
-                    err_text = None
-                    
-                    try:
-                        import json
-                        # Шукаємо JSON в повідомленні помилки
-                        if 'errCode' in error_message or 'errText' in error_message:
-                            # Спробуємо витягнути JSON з повідомлення
-                            if '{' in error_message:
-                                json_start = error_message.find('{')
-                                json_end = error_message.rfind('}') + 1
-                                if json_start < json_end:
-                                    error_json = json.loads(error_message[json_start:json_end])
-                                    err_code = error_json.get('errCode')
-                                    err_text = error_json.get('errText', error_message)
-                    except:
-                        pass
-                    
-                    # Якщо не вдалося розпарсити, використовуємо повне повідомлення
-                    if not err_code:
-                        err_code = 'UNKNOWN_ERROR'
-                        err_text = error_message
-                    
-                    logging.warning(f"📋 Код помилки: {err_code}, Текст: {err_text}")
-                    
-                    # Зберігаємо помилку в базу даних
-                    save_subscription_payment(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        amount=price,
-                        status='failed',
-                        invoice_id=None,
-                        payment_id=None,
-                        error_message=f"{err_code}: {err_text}"
-                    )
-                    
-                    # Обробляємо різні типи помилок
-                    if err_code == 'TOKEN_NOT_FOUND':
-                        # Токен не знайдено - деактивуємо підписку, бо токен не дійсний
-                        logging.error(f"🚫 Токен картки не знайдено для підписки {subscription_id}. Деактивуємо підписку.")
-                        deactivate_subscription(subscription_id)
-                        await notify_user_token_invalid(
-                            user_id, product_name, masked_card, err_text,
-                            source=_subscription_source(subscription_id),
-                        )
-                    else:
-                        await handle_recurring_payment_failure(
-                            subscription_id=subscription_id,
-                            user_id=user_id,
-                            product_name=product_name,
-                            masked_card=masked_card,
-                            failure_reason=err_text,
-                        )
-                    
-                    continue  # Переходимо до наступної підписки
-                
-                # Чекаємо трохи перед перевіркою статусу (платіж може бути ще не готовий)
-                await asyncio.sleep(2)
-                
-                # Перевіряємо статус платежу з повторними спробами
-                max_attempts = 5
-                attempt = 0
-                payment_status = None
-                final_status = None
-                
-                while attempt < max_attempts:
-                    attempt += 1
-                    logging.info(f"🔍 Перевірка статусу платежу {invoice_id} (спроба {attempt}/{max_attempts})")
-                    
-                    try:
-                        payment_status = payment_manager.get_payment_status(invoice_id)
-                        current_status = payment_status.get('status')
-                        modified_date = payment_status.get('modifiedDate')
-                        
-                        logging.info(f"📊 Статус платежу: {current_status}, modifiedDate: {modified_date}")
-                        
-                        # Якщо платіж завершений (success або failure), виходимо з циклу
-                        if current_status in ['success', 'failure', 'expired']:
-                            final_status = current_status
-                            break
-                        # Якщо платіж в обробці, чекаємо і перевіряємо знову
-                        elif current_status == 'processing':
-                            if attempt < max_attempts:
-                                wait_time = min(5 * attempt, 30)  # Збільшуємо час очікування з кожною спробою
-                                logging.info(f"⏳ Платіж в обробці, чекаємо {wait_time} секунд перед наступною перевіркою")
-                                await asyncio.sleep(wait_time)
-                            else:
-                                final_status = 'processing'
-                                break
-                        else:
-                            logging.warning(f"❓ Невідомий статус: {current_status}")
-                            final_status = current_status
-                            break
-                            
-                    except Exception as e:
-                        logging.error(f"❌ Помилка при перевірці статусу платежу: {e}")
-                        if attempt < max_attempts:
-                            await asyncio.sleep(5)
-                        else:
-                            raise
-                
-                if not payment_status:
-                    logging.error(f"❌ Не вдалося отримати статус платежу {invoice_id} після {max_attempts} спроб")
-                    save_subscription_payment(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        amount=price,
-                        status='error',
-                        invoice_id=invoice_id,
-                        payment_id=local_payment_id,
-                        error_message=f"Не вдалося отримати статус після {max_attempts} спроб"
-                    )
-                    await handle_recurring_payment_failure(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        product_name=product_name,
-                        invoice_id=invoice_id,
-                        failure_reason=f"Не вдалося отримати статус після {max_attempts} спроб",
-                        notify=False,
-                    )
-                    continue
-                    
-                # Витягуємо детальну інформацію з payment_status для перевірки
-                payment_info = payment_status.get('paymentInfo', {})
-                status_masked_card = payment_info.get('maskedPan') or masked_card
-                status_card_type = payment_info.get('paymentSystem', card_type)
-                modified_date = payment_status.get('modifiedDate')
-                
-                # Логуємо всі дані для діагностики
-                logging.info(f"💳 Дані платежу: invoice_id={invoice_id}, masked_card={status_masked_card}, card_type={status_card_type}")
-                logging.info(f"🔑 Токен картки (частково): {card_token[:8] + '...' + card_token[-4:] if card_token and len(card_token) > 12 else 'N/A'}")
-                logging.info(f"📅 ModifiedDate: {modified_date}")
-                
-                current_status = payment_status.get('status')
-                
-                if current_status == 'success':
-                    # Успішний платіж
-                    logging.info(f"✅ Успішний платіж для підписки {subscription_id}")
-                    save_subscription_payment(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        amount=price,
-                        status='success',
-                        invoice_id=invoice_id,
-                        payment_id=local_payment_id
-                    )
-                    
-                    # Оновлюємо дату наступного платежу
-                    logging.info(f"📅 Оновлення дати наступного платежу для підписки {subscription_id}")
-                    update_subscription_next_payment(subscription_id, months)
-                    reset_payment_failures(subscription_id)
-                    track_link_purchase(user_id)
+            await _process_single_recurring_subscription(subscription, payment_manager)
 
-                    ref_id = get_ref_id_by_user(user_id)
-                    if ref_id:
-                        add_partner_credit(
-                            partner_id=ref_id,
-                            buyer_id=user_id,
-                            purchase_amount=price,
-                            product_name=product_name,
-                            payment_type="subscription",
-                        )
-                        credit_amount = round(price * (get_partner_referral_percent() / 100), 1)
-                        if credit_amount > 0:
-                            buyer_username = get_username_by_id(user_id)
-                            buyer_line = f"@{buyer_username}" if (buyer_username and str(buyer_username).strip()) else f"користувач (ID: {user_id}, прихований профіль)"
-                            try:
-                                await bot.send_message(
-                                    ref_id,
-                                    get_partner_referral_purchase_text(buyer_line, product_name, price, credit_amount),
-                                    parse_mode="HTML",
-                                )
-                            except Exception:
-                                pass
-
-                    # Повідомляємо користувача про успішний платіж з усіма даними для перевірки
-                    logging.info(f"📱 Відправка повідомлення користувачу {user_id} про успішний платіж")
-                    await notify_user_payment_success(
-                        user_id=user_id, 
-                        product_name=product_name, 
-                        amount=price, 
-                        months=months,
-                        invoice_id=invoice_id,
-                        masked_card=status_masked_card,
-                        card_token=card_token,
-                        source=_subscription_source(subscription_id),
-                    )
-                    
-                    logging.info(f"✅ Успішний платіж для підписки {subscription_id}, користувач {user_id}, invoice_id={invoice_id}")
-                
-                elif current_status == 'processing':
-                    # Платіж в обробці - НЕ оновлюємо дату наступного платежу, бо платіж ще не завершений
-                    # Зберігаємо інформацію про платіж для подальшої перевірки
-                    logging.warning(f"⏳ Платіж {invoice_id} для підписки {subscription_id} все ще в обробці після {max_attempts} спроб")
-                    save_subscription_payment(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        amount=price,
-                        status='processing',
-                        invoice_id=invoice_id,
-                        payment_id=local_payment_id
-                    )
-                    # НЕ оновлюємо дату наступного платежу - платіж ще не завершений
-                    # Платіж буде перевірений при наступному запуску cron або через webhook
-                    logging.info(f"⏳ Платіж {invoice_id} залишається в обробці, дата наступного платежу НЕ оновлена")
-                    
-                elif current_status == 'failure':
-                    failure_reason = payment_status.get('failureReason', 'Невідома помилка')
-                    logging.warning(f"❌ Невдалий платіж для підписки {subscription_id}: {failure_reason}")
-                    
-                    save_subscription_payment(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        amount=price,
-                        status='failed',
-                        invoice_id=invoice_id,
-                        payment_id=local_payment_id,
-                        error_message=failure_reason
-                    )
-                    
-                    await handle_recurring_payment_failure(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        product_name=product_name,
-                        masked_card=status_masked_card,
-                        invoice_id=invoice_id,
-                        card_token=card_token,
-                        failure_reason=failure_reason,
-                    )
-                
-                elif current_status == 'expired':
-                    logging.warning(f"⏰ Рахунок {invoice_id} для підписки {subscription_id} застарів")
-                    save_subscription_payment(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        amount=price,
-                        status='failed',
-                        invoice_id=invoice_id,
-                        payment_id=local_payment_id,
-                        error_message='Рахунок застарів'
-                    )
-                    await handle_recurring_payment_failure(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        product_name=product_name,
-                        masked_card=status_masked_card,
-                        invoice_id=invoice_id,
-                        card_token=card_token,
-                        failure_reason='Рахунок застарів',
-                    )
-                
-                else:
-                    logging.warning(f"❓ Невідомий статус платежу: {current_status}")
-                    save_subscription_payment(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        amount=price,
-                        status='error',
-                        invoice_id=invoice_id,
-                        payment_id=local_payment_id,
-                        error_message=f"Невідомий статус: {current_status}"
-                    )
-                    await handle_recurring_payment_failure(
-                        subscription_id=subscription_id,
-                        user_id=user_id,
-                        product_name=product_name,
-                        masked_card=status_masked_card,
-                        invoice_id=invoice_id,
-                        failure_reason=f"Невідомий статус: {current_status}",
-                    )
-                
-            except Exception as e:
-                logging.error(f"💥 Помилка при обробці підписки {subscription_id}: {e}")
-                save_subscription_payment(
-                    subscription_id=subscription_id,
-                    user_id=user_id,
-                    amount=price,
-                    status='error',
-                    error_message=str(e)
-                )
-                await handle_recurring_payment_failure(
-                    subscription_id=subscription_id,
-                    user_id=user_id,
-                    product_name=product_name,
-                    failure_reason=str(e),
-                    notify=False,
-                )
-                
         logging.info("✅ Завершено обробку повторюваних платежів")
-                
+
     except Exception as e:
         logging.error(f"💥 Помилка при обробці повторюваних платежів: {e}")
 
