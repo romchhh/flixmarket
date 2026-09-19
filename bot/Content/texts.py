@@ -298,11 +298,13 @@ def get_partner_referral_purchase_text(
 
 
 def get_user_subscription_success_text(
-    product_name: str, months: int, amount: float, card_info: str | None = None
+    product_name: str, months: int, amount: float, card_info: str | None = None,
+    source: str | None = "bot",
 ) -> str:
     """Текст повідомлення користувачу про успішне оформлення підписки (з автосписанням)."""
     cal = get_calendar_emoji_html()
     m = _months_word(months)
+    channel = normalize_purchase_source(source)
     text = (
         f"{get_premium_emoji('check')} <b>Підписка успішно оформлена!</b>\n\n"
         f"• Підписка: {product_name}\n"
@@ -312,8 +314,13 @@ def get_user_subscription_success_text(
     )
     if card_info:
         text += f"{card_info}\n\n"
+    if channel == "site":
+        text += (
+            "Доступ уже на сайті flix-market.com у кабінеті / на сторінці замовлення.\n\n"
+        )
+    else:
+        text += "Зачекайте поки з вами зв'яжеться менеджер для підключення підписки\n\n"
     text += (
-        "Зачекайте поки з вами зв'яжеться менеджер для підключення підписки\n\n"
         f"{get_premium_emoji('bell')} <b>Для отримання всіх оновлень підпишіться на наш канал:</b>\n"
     )
     return text
@@ -332,16 +339,23 @@ def get_user_subscription_token_not_found_text(product_name: str, months: int, a
     )
 
 
-def get_user_one_time_success_text(product_name: str, months: int, amount: float) -> str:
+def get_user_one_time_success_text(
+    product_name: str, months: int, amount: float, source: str | None = "bot",
+) -> str:
     """Текст повідомлення користувачу про успішну одноразову оплату."""
     m = _months_word(months)
+    channel = normalize_purchase_source(source)
+    if channel == "site":
+        howto = "Доступ уже на сайті flix-market.com у кабінеті / на сторінці замовлення."
+    else:
+        howto = "Зачекайте поки з вами зв'яжеться менеджер для підключення підписки"
     return (
         f"{get_premium_emoji('check')} <b>Оплата успішна!</b>\n\n"
         f"• Підписка: {product_name}\n"
         f"• Термін: {months} {m}\n"
         f"• Сума: {amount} UAH\n\n"
         f"{get_premium_emoji('card')} <b>Одноразова оплата</b>\n\n"
-        f"Зачекайте поки з вами зв'яжеться менеджер для підключення підписки\n\n"
+        f"{howto}\n\n"
         f"{get_premium_emoji('bell')} <b>Для отримання всіх оновлень підпишіться на наш канал:</b>\n"
     )
 
@@ -386,6 +400,29 @@ def format_admin_source_line(source: str | None) -> str:
     return f"📍 Джерело: <b>{format_source_label(source)}</b>"
 
 
+def format_admin_site_delivery_block(site_delivery: dict | None) -> str:
+    if not site_delivery:
+        return ""
+    if not site_delivery.get("autoIssue"):
+        return "\n\nℹ️ Автовидача вимкнена — доступ видає менеджер у Telegram."
+    if site_delivery.get("delivered"):
+        lines = ["\n\n✅ <b>Автовидача зі складу сайту</b>"]
+        login = site_delivery.get("login")
+        password = site_delivery.get("password")
+        profile = site_delivery.get("profileName")
+        pin = site_delivery.get("pin")
+        if login:
+            lines.append(f"• Логін: <code>{login}</code>")
+        if password:
+            lines.append(f"• Пароль: <code>{password}</code>")
+        if profile:
+            lines.append(f"• Профіль: <b>{profile}</b>")
+        if pin:
+            lines.append(f"• PIN: <code>{pin}</code>")
+        return "\n".join(lines)
+    return "\n\n⚠️ Автовидача увімкнена, але акаунт зі складу не видано — перевір склад на сайті."
+
+
 def get_admin_new_subscription_text(
     payment_id: str,
     user_id: int,
@@ -397,6 +434,7 @@ def get_admin_new_subscription_text(
     ref_username: str | None,
     credit_amount: float,
     source: str | None = "bot",
+    site_delivery: dict | None = None,
 ) -> str:
     """Текст адмін-повідомлення «Нова підписка!»."""
     cal = get_calendar_emoji_html()
@@ -404,10 +442,13 @@ def get_admin_new_subscription_text(
     channel = normalize_purchase_source(source)
     if channel == "site":
         title = "Нова підписка з сайту!"
+        extra = format_admin_site_delivery_block(site_delivery)
     elif channel == "miniapp":
         title = "Нова підписка з мінідодатку!"
+        extra = ""
     else:
         title = "Нова підписка!"
+        extra = ""
     return (
         f"{get_premium_emoji('money')} <b>{title}</b>\n\n"
         f"{format_admin_source_line(channel)}\n"
@@ -418,6 +459,7 @@ def get_admin_new_subscription_text(
         f"Сума: {amount} UAH\n"
         f"Термін: {months} {m}"
         f"{format_admin_referral_line(ref_id, ref_username, credit_amount)}"
+        f"{extra}"
     )
 
 
@@ -433,15 +475,19 @@ def get_admin_new_one_time_text(
     ref_username: str | None,
     credit_amount: float,
     source: str | None = "bot",
+    site_delivery: dict | None = None,
 ) -> str:
     """Текст адмін-повідомлення «Нова оплата!» (одноразова)."""
     channel = normalize_purchase_source(source)
     if channel == "site":
         title = "Нова оплата з сайту!"
+        extra = format_admin_site_delivery_block(site_delivery)
     elif channel == "miniapp":
         title = "Нова оплата з мінідодатку!"
+        extra = ""
     else:
         title = "Нова оплата!"
+        extra = ""
     return (
         f"{get_premium_emoji('money')} <b>{title}</b>\n\n"
         f"{format_admin_source_line(channel)}\n"
@@ -453,6 +499,7 @@ def get_admin_new_one_time_text(
         f"Термін: {months} міс.\n"
         f"Активна до: {end_date_str}"
         f"{format_admin_referral_line(ref_id, ref_username, credit_amount)}"
+        f"{extra}"
     )
 
 

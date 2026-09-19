@@ -507,6 +507,23 @@ async def payments_get(request):
     return _json(info)
 
 
+async def payments_site_fulfill(request):
+    from database.client_db import get_site_delivery, save_site_delivery
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    invoice_id = str(body.get("invoice_id") or body.get("invoiceId") or "").strip()
+    if not invoice_id:
+        return _json({"error": "invoice_id required"}, 400)
+    delivery = body.get("delivery") if isinstance(body.get("delivery"), dict) else {}
+    if body.get("autoIssue") is not None:
+        delivery = {**delivery, "autoIssue": bool(body.get("autoIssue"))}
+    save_site_delivery(invoice_id, delivery)
+    return _json({"ok": True, "siteDelivery": get_site_delivery(invoice_id)})
+
+
 async def mono_webhook(request):
     try:
         data = await request.json()
@@ -592,6 +609,7 @@ def build_app() -> web.Application:
 
     app.router.add_post("/api/v1/payments", payments_create)
     app.router.add_post("/api/v1/payments/record", payments_record)
+    app.router.add_post("/api/v1/payments/site-fulfill", payments_site_fulfill)
     app.router.add_get("/api/v1/payments/{invoice_id}", payments_get)
     app.router.add_post("/api/v1/webhooks/mono", mono_webhook)
 

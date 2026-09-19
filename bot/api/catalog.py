@@ -1,9 +1,11 @@
 """Серіалізація каталогу бота у формат сайту."""
 from __future__ import annotations
 
+import os
 import re
 
 from ulits.admin_functions import strip_html_for_button
+from ulits.path_utils import resolve_media_path
 from ulits.payment_create import parse_tariffs
 
 _ICON_MAP = (
@@ -35,6 +37,26 @@ def clean_text(value) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def clean_description(value) -> str:
+    if not value:
+        return ""
+    text = strip_html_for_button(str(value))
+    text = re.sub(r"[\U0001F300-\U0001FAFF]", "", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n")]
+    out: list[str] = []
+    prev_empty = False
+    for line in lines:
+        if not line:
+            if not prev_empty and out:
+                out.append("")
+            prev_empty = True
+        else:
+            out.append(line)
+            prev_empty = False
+    return "\n".join(out).strip()
+
+
 def slug_for(product: dict) -> str:
     name = clean_text(product.get("product_name") or "product")
     ascii_name = re.sub(r"[^a-zA-Z0-9]+", "-", name).strip("-").lower()
@@ -59,6 +81,16 @@ def is_recurring(product: dict) -> bool:
     return (product.get("payment_type") or "") == "subscription"
 
 
+def media_version(stored_path: str | None) -> int | None:
+    """Мітка версії фото — змінюється при заміні файлу в боті."""
+    if not stored_path:
+        return None
+    path = resolve_media_path(stored_path)
+    if path and os.path.isfile(path):
+        return int(os.path.getmtime(path))
+    return None
+
+
 def serialize_product(product: dict, public_api_url: str = "") -> dict:
     tariffs = parse_tariffs(product.get("product_price"))
     by_months = {m: uah_to_kop(p) for m, p in tariffs}
@@ -70,8 +102,9 @@ def serialize_product(product: dict, public_api_url: str = "") -> dict:
 
     icon, color = icon_for(product)
     name = clean_text(product.get("product_name"))
-    description = clean_text(product.get("product_description"))
+    description = clean_description(product.get("product_description"))
     photo = product.get("product_photo") or ""
+    photo_version = media_version(photo) if photo else None
     photo_url = None
     if photo:
         base = (public_api_url or "").rstrip("/")
@@ -115,6 +148,7 @@ def serialize_product(product: dict, public_api_url: str = "") -> dict:
         "categoryId": str(product.get("catalog_id") or ""),
         "categoryName": clean_text(product.get("product_type") or "Інше"),
         "photoUrl": photo_url,
+        "photoVersion": photo_version,
         "badge": badge or None,
         "tariff": str(product.get("product_price") or ""),
         "paymentType": "subscription" if recurring else "one_time",
@@ -125,6 +159,7 @@ def serialize_product(product: dict, public_api_url: str = "") -> dict:
 def serialize_category(catalog_id, name, count: int, image_path=None, public_api_url: str = "") -> dict:
     icon, color = icon_for({"product_type": name, "product_name": name})
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", clean_text(name)).strip("-").lower() or f"cat-{catalog_id}"
+    photo_version = media_version(image_path) if image_path else None
     photo_url = None
     if image_path:
         base = (public_api_url or "").rstrip("/")
@@ -139,4 +174,5 @@ def serialize_category(catalog_id, name, count: int, image_path=None, public_api
         "active": True,
         "count": count,
         "photoUrl": photo_url,
+        "photoVersion": photo_version,
     }

@@ -121,6 +121,14 @@ def migrate_payments_source():
         conn.commit()
 
 
+def migrate_payments_site_delivery():
+    cursor.execute("PRAGMA table_info(payments)")
+    columns = {column[1] for column in cursor.fetchall()}
+    if "site_delivery" not in columns:
+        cursor.execute("ALTER TABLE payments ADD COLUMN site_delivery TEXT")
+        conn.commit()
+
+
 def migrate_subscriptions_source():
     """Звідки оформлено підписку: bot | site | miniapp."""
     for table in ("subscriptions", "recurring_subscriptions"):
@@ -441,17 +449,73 @@ def create_payments_table():
     conn.commit()
 
 def save_payment_info(payment_id: str, invoice_id: str, user_id: int, product_id: int, months: int, amount: float, status: str, payment_type: str = 'one_time', source: str = 'bot') -> bool:
+    migrate_payments_site_delivery()
     try:
         cursor.execute("""
             INSERT INTO payments (
                 payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, source, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(invoice_id) DO UPDATE SET
+                payment_id = excluded.payment_id,
+                user_id = excluded.user_id,
+                product_id = excluded.product_id,
+                months = excluded.months,
+                amount = excluded.amount,
+                status = excluded.status,
+                payment_type = excluded.payment_type,
+                source = excluded.source,
+                updated_at = datetime('now')
         """, (payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, source))
         conn.commit()
         return True
     except sqlite3.Error as e:
         print(f"Помилка при збереженні платежу: {e}")
         return False
+
+
+def save_site_delivery(invoice_id: str, delivery: dict | None) -> bool:
+    import json
+    migrate_payments_site_delivery()
+    if not invoice_id:
+        return False
+    payload = json.dumps(delivery or {}, ensure_ascii=False, default=str)
+    try:
+        cursor.execute(
+            "UPDATE payments SET site_delivery = ?, updated_at = datetime('now') WHERE invoice_id = ?",
+            (payload, invoice_id),
+        )
+        if cursor.rowcount == 0:
+            cursor.execute(
+                """
+                INSERT INTO payments (
+                    payment_id, invoice_id, user_id, product_id, months, amount,
+                    status, payment_type, source, site_delivery, created_at
+                ) VALUES (?, ?, 0, 0, 1, 0, 'pending', 'one_time', 'site', ?, datetime('now'))
+                """,
+                (invoice_id, invoice_id, payload),
+            )
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Помилка save_site_delivery: {e}")
+        return False
+
+
+def get_site_delivery(invoice_id: str) -> dict | None:
+    import json
+    migrate_payments_site_delivery()
+    try:
+        cursor.execute(
+            "SELECT site_delivery FROM payments WHERE invoice_id = ? OR payment_id = ? LIMIT 1",
+            (invoice_id, invoice_id),
+        )
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            return None
+        data = json.loads(row[0])
+        return data if isinstance(data, dict) else None
+    except (sqlite3.Error, json.JSONDecodeError, TypeError):
+        return None
 
 
 def get_full_payment(invoice_id: str):
@@ -631,6 +695,8 @@ def save_mono_event(invoice_id: str, status: str, payload: dict) -> None:
         """,
         (invoice_id, status, json.dumps(payload, ensure_ascii=False, default=str)),
     )
+    if isinstance(payload, dict) and payload.get("siteDelivery"):
+        save_site_delivery(str(invoice_id), payload.get("siteDelivery"))
     wallet = payload.get("walletData") if isinstance(payload, dict) else None
     wallet_id = wallet.get("walletId") if isinstance(wallet, dict) else None
     if invoice_id and wallet_id:

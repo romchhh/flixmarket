@@ -13,6 +13,7 @@ from database.client_db import (
     cursor,
     conn,
     get_username_by_id,
+    get_site_delivery,
     get_ref_id_by_user,
     add_partner_credit,
     get_partner_referral_percent,
@@ -322,6 +323,7 @@ async def check_pending_payments():
                     
                     username = get_username_by_id(user_id)
                     update_payment_status(invoice_id, "success")
+                    site_delivery = get_site_delivery(invoice_id)
                     track_link_purchase(user_id)
 
                     product = get_product_by_id(product_id)
@@ -447,12 +449,16 @@ async def check_pending_payments():
                             card_info = f"{get_premium_emoji('card')} <b>Картка:</b> {masked_card}"
                             if card_type != "unknown":
                                 card_info += f" ({card_type.upper()})"
-                            await bot.send_message(
-                                user_id,
-                                get_user_subscription_success_text(product_name, months, amount, card_info=card_info),
-                                parse_mode="HTML",
-                                reply_markup=get_channel_keyboard()
-                            )
+                            if int(user_id) > 0:
+                                await bot.send_message(
+                                    user_id,
+                                    get_user_subscription_success_text(
+                                        product_name, months, amount,
+                                        card_info=card_info, source=purchase_source,
+                                    ),
+                                    parse_mode="HTML",
+                                    reply_markup=get_channel_keyboard()
+                                )
                             cursor.execute("DELETE FROM payments_temp_data WHERE local_payment_id = ?", (payment_id,))
                             conn.commit()
                             sub_username = get_username_by_id(user_id)
@@ -467,6 +473,7 @@ async def check_pending_payments():
                                     get_admin_new_subscription_text(
                                         payment_id, user_id, sub_username, product_name, amount, months,
                                         ref_id, sub_ref_username, sub_credit, purchase_source,
+                                        site_delivery=site_delivery,
                                     ),
                                     parse_mode="HTML",
                                     reply_markup=keyboard
@@ -478,6 +485,7 @@ async def check_pending_payments():
                                     get_admin_new_subscription_text(
                                         payment_id, user_id, sub_username, product_name, amount, months,
                                         ref_id, sub_ref_username, sub_credit, purchase_source,
+                                        site_delivery=site_delivery,
                                     ),
                                     parse_mode="HTML"
                                 )
@@ -518,12 +526,15 @@ async def check_pending_payments():
                             source=purchase_source,
                         )
                         
-                        await bot.send_message(
-                            user_id,
-                            get_user_one_time_success_text(product_name, months, amount),
-                            parse_mode="HTML",
-                            reply_markup=get_channel_keyboard()
-                        )
+                        if int(user_id) > 0:
+                            await bot.send_message(
+                                user_id,
+                                get_user_one_time_success_text(
+                                    product_name, months, amount, source=purchase_source,
+                                ),
+                                parse_mode="HTML",
+                                reply_markup=get_channel_keyboard()
+                            )
                         ref_username_one_time = get_username_by_id(ref_id) if ref_id else None
                         credit_one_time = round(amount * (get_partner_referral_percent() / 100), 1) if ref_id else 0
                         try:
@@ -535,7 +546,7 @@ async def check_pending_payments():
                                 get_admin_new_one_time_text(
                                     invoice_id, user_id, username, product_name, amount, months,
                                     end_date.strftime('%d.%m.%Y'), ref_id, ref_username_one_time, credit_one_time,
-                                    purchase_source,
+                                    purchase_source, site_delivery=site_delivery,
                                 ),
                                 parse_mode="HTML",
                                 reply_markup=keyboard
@@ -547,16 +558,17 @@ async def check_pending_payments():
                                 get_admin_new_one_time_text(
                                     invoice_id, user_id, username, product_name, amount, months,
                                     end_date.strftime('%d.%m.%Y'), ref_id, ref_username_one_time, credit_one_time,
-                                    purchase_source,
+                                    purchase_source, site_delivery=site_delivery,
                                 ),
                                 parse_mode="HTML"
                             )
-                            await bot.send_message(
-                                user_id,
-                                get_user_contact_manager_text(invoice_id),
-                                parse_mode="HTML",
-                                reply_markup=get_manager_keyboard()
-                            )
+                            if purchase_source != "site" and int(user_id) > 0:
+                                await bot.send_message(
+                                    user_id,
+                                    get_user_contact_manager_text(invoice_id),
+                                    parse_mode="HTML",
+                                    reply_markup=get_manager_keyboard()
+                                )
 
                     
                     logging.info(f"Платіж {invoice_id} оброблено успішно")
