@@ -38,6 +38,31 @@ import sqlite3
 import uuid
 
 
+def _site_delivery_ready(delivery: dict | None) -> bool:
+    from database.client_db import site_delivery_has_account
+
+    if not isinstance(delivery, dict) or not delivery:
+        return False
+    if delivery.get("autoIssue") is False:
+        return True
+    return bool(delivery.get("delivered")) and site_delivery_has_account(delivery)
+
+
+async def resolve_site_delivery_for_notify(invoice_id: str, source: str | None) -> dict | None:
+    """Для оплат із сайту почекати, поки склад запише логін/пароль."""
+    delivery = get_site_delivery(invoice_id)
+    if (source or "bot") != "site":
+        return delivery
+    for _ in range(10):
+        if _site_delivery_ready(delivery):
+            return delivery
+        await asyncio.sleep(1.5)
+        delivery = get_site_delivery(invoice_id)
+    if not _site_delivery_ready(delivery):
+        logging.warning("site delivery still empty for invoice %s", invoice_id)
+    return delivery
+
+
 def default_redirect_url() -> str:
     from config import BOT_USERNAME
     return f"https://t.me/{BOT_USERNAME or 'FlixMarketBot'}"
@@ -323,7 +348,7 @@ async def check_pending_payments():
                     
                     username = get_username_by_id(user_id)
                     update_payment_status(invoice_id, "success")
-                    site_delivery = get_site_delivery(invoice_id)
+                    site_delivery = await resolve_site_delivery_for_notify(invoice_id, purchase_source)
                     track_link_purchase(user_id)
 
                     product = get_product_by_id(product_id)
@@ -445,6 +470,7 @@ async def check_pending_payments():
                                 price=amount,
                                 wallet_id=wallet_id,
                                 source=purchase_source,
+                                issued_access=site_delivery,
                             )
                             card_info = f"{get_premium_emoji('card')} <b>Картка:</b> {masked_card}"
                             if card_type != "unknown":

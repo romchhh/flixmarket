@@ -478,7 +478,16 @@ def save_site_delivery(invoice_id: str, delivery: dict | None) -> bool:
     migrate_payments_site_delivery()
     if not invoice_id:
         return False
-    payload = json.dumps(delivery or {}, ensure_ascii=False, default=str)
+    existing = get_site_delivery(invoice_id)
+    incoming = delivery or {}
+    if (
+        isinstance(existing, dict)
+        and existing.get("delivered")
+        and site_delivery_has_account(existing)
+        and not site_delivery_has_account(incoming)
+    ):
+        return True
+    payload = json.dumps(incoming, ensure_ascii=False, default=str)
     try:
         cursor.execute(
             "UPDATE payments SET site_delivery = ?, updated_at = datetime('now') WHERE invoice_id = ?",
@@ -499,6 +508,63 @@ def save_site_delivery(invoice_id: str, delivery: dict | None) -> bool:
     except sqlite3.Error as e:
         print(f"Помилка save_site_delivery: {e}")
         return False
+
+
+def site_delivery_has_account(delivery: dict | None) -> bool:
+    if not isinstance(delivery, dict):
+        return False
+    if delivery.get("autoIssue") is False:
+        return True
+    if delivery.get("login") or delivery.get("password"):
+        return True
+    parts = delivery.get("parts")
+    if isinstance(parts, list):
+        for part in parts:
+            if isinstance(part, dict) and (
+                part.get("login") or part.get("password") or part.get("playlistUrl")
+            ):
+                return True
+    return False
+
+
+def get_latest_site_delivery_for_user(user_id: int, product_id: int | None = None) -> dict | None:
+    """Останній виданий зі складу акаунт цього користувача (для автосписань)."""
+    import json
+    migrate_payments_site_delivery()
+    try:
+        if product_id:
+            cursor.execute(
+                """
+                SELECT site_delivery FROM payments
+                WHERE user_id = ? AND product_id = ?
+                  AND site_delivery IS NOT NULL AND TRIM(site_delivery) != ''
+                ORDER BY datetime(created_at) DESC
+                LIMIT 20
+                """,
+                (int(user_id), int(product_id)),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT site_delivery FROM payments
+                WHERE user_id = ?
+                  AND site_delivery IS NOT NULL AND TRIM(site_delivery) != ''
+                ORDER BY datetime(created_at) DESC
+                LIMIT 20
+                """,
+                (int(user_id),),
+            )
+        for row in cursor.fetchall():
+            try:
+                data = json.loads(row[0])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if site_delivery_has_account(data) and data.get("delivered"):
+                return data
+        return None
+    except sqlite3.Error as e:
+        print(f"Помилка get_latest_site_delivery_for_user: {e}")
+        return None
 
 
 def get_site_delivery(invoice_id: str) -> dict | None:
@@ -634,10 +700,21 @@ def create_recurring_subscriptions_table():
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             payment_failures INTEGER DEFAULT 0,
             source TEXT DEFAULT 'bot',
+            issued_access TEXT,
             FOREIGN KEY (wallet_id) REFERENCES user_tokens(wallet_id)
         )
     ''')
     conn.commit()
+    migrate_recurring_issued_access()
+
+
+def migrate_recurring_issued_access():
+    """Логін/пароль з першої видачі — той самий акаунт на всі автосписання."""
+    cursor.execute("PRAGMA table_info(recurring_subscriptions)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "issued_access" not in columns:
+        cursor.execute("ALTER TABLE recurring_subscriptions ADD COLUMN issued_access TEXT")
+        conn.commit()
 
 
 def create_subscription_payments_table():
@@ -979,18 +1056,24 @@ def get_user_token(user_id: int) -> tuple:
 
 
 def create_recurring_subscription(user_id: int, product_id: int, product_name: str, 
-                                months: int, price: float, wallet_id: str, source: str = "bot") -> bool:
-    """Створює повторювану підписку"""
+                                months: int, price: float, wallet_id: str, source: str = "bot",
+                                issued_access: dict | None = None) -> bool:
+    """Створює повторювану підписку і зберігає акаунт з першої видачі."""
+    import json
     try:
         from datetime import datetime, timedelta
+        migrate_recurring_issued_access()
         
         next_payment_date = (datetime.now() + timedelta(days=30 * months)).strftime('%Y-%m-%d %H:%M:%S')
+        access_json = None
+        if isinstance(issued_access, dict) and issued_access.get("delivered"):
+            access_json = json.dumps(issued_access, ensure_ascii=False, default=str)
         
         cursor.execute("""
             INSERT INTO recurring_subscriptions 
-            (user_id, product_id, product_name, months, price, wallet_id, next_payment_date, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, product_id, product_name, months, price, wallet_id, next_payment_date, source or "bot"))
+            (user_id, product_id, product_name, months, price, wallet_id, next_payment_date, source, issued_access)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, product_id, product_name, months, price, wallet_id, next_payment_date, source or "bot", access_json))
         conn.commit()
         return True
     except sqlite3.Error as e:
@@ -1122,8 +1205,54 @@ def save_subscription_payment(subscription_id: int, user_id: int, amount: float,
         return False
 
 
+def get_subscription_issued_access(subscription_id: int) -> dict | None:
+    import json
+    migrate_recurring_issued_access()
+    try:
+        cursor.execute(
+            "SELECT issued_access FROM recurring_subscriptions WHERE id = ?",
+            (int(subscription_id),),
+        )
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            return None
+        data = json.loads(row[0])
+        return data if isinstance(data, dict) else None
+    except (sqlite3.Error, json.JSONDecodeError, TypeError) as e:
+        print(f"Помилка get_subscription_issued_access: {e}")
+        return None
+
+
+def save_subscription_issued_access(subscription_id: int, delivery: dict | None) -> bool:
+    """Записати акаунт першої видачі, якщо на підписці його ще немає."""
+    import json
+    migrate_recurring_issued_access()
+    if not subscription_id or not isinstance(delivery, dict) or not delivery.get("delivered"):
+        return False
+    if not site_delivery_has_account(delivery):
+        return False
+    try:
+        current = get_subscription_issued_access(subscription_id)
+        if isinstance(current, dict) and current.get("delivered") and site_delivery_has_account(current):
+            return True
+        cursor.execute(
+            """
+            UPDATE recurring_subscriptions
+            SET issued_access = ?, updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (json.dumps(delivery, ensure_ascii=False, default=str), int(subscription_id)),
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Помилка save_subscription_issued_access: {e}")
+        return False
+
+
 def get_recurring_subscription(subscription_id: int, user_id: int | None = None):
     try:
+        migrate_recurring_issued_access()
         if user_id is None:
             cursor.execute(
                 """

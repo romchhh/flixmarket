@@ -142,7 +142,7 @@ def serialize_product(product: dict, public_api_url: str = "") -> dict:
         "price6": by_months.get(6, 0),
         "price12": by_months.get(12, 0),
         "faq": "",
-        "deliveryNote": "Після оплати менеджер надішле доступ у Telegram або на пошту.",
+        "deliveryNote": "Після оплати менеджер надішле доступ у Telegram.",
         "visible": True,
         "autoIssue": False,
         "categoryId": str(product.get("catalog_id") or ""),

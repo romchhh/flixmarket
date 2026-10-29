@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from database.client_db import get_active_subscriptions, get_active_recurring_subscriptions, get_user_token, update_subscription_next_payment, increment_payment_failures, postpone_subscription_retry, reset_payment_failures, deactivate_subscription, save_subscription_payment, get_ref_id_by_user, add_partner_credit, get_partner_referral_percent, get_username_by_id, get_recurring_subscription
+from database.client_db import get_active_subscriptions, get_active_recurring_subscriptions, get_user_token, update_subscription_next_payment, increment_payment_failures, postpone_subscription_retry, reset_payment_failures, deactivate_subscription, save_subscription_payment, get_ref_id_by_user, add_partner_credit, get_partner_referral_percent, get_username_by_id, get_recurring_subscription, get_latest_site_delivery_for_user, get_subscription_issued_access, save_subscription_issued_access
 from database.links_db import track_link_purchase
 from ulits.monopay_functions import PaymentManager
 from Content.texts import get_premium_emoji
@@ -332,6 +332,8 @@ async def _process_single_recurring_subscription(subscription, payment_manager: 
                 masked_card=status_masked_card,
                 card_token=card_token,
                 source=_subscription_source(subscription_id),
+                product_id=product_id,
+                subscription_id=subscription_id,
             )
 
             logging.info(f"✅ Успішний платіж для підписки {subscription_id}, користувач {user_id}, invoice_id={invoice_id}")
@@ -500,11 +502,32 @@ async def process_recurring_payments():
         logging.error(f"💥 Помилка при обробці повторюваних платежів: {e}")
 
 
+def _issued_account_for_renewal(
+    user_id: int,
+    product_id: int | None,
+    source: str,
+    subscription_id: int | None = None,
+) -> dict | None:
+    """Автосписання не видає новий акаунт — лише той, що збережений з першої оплати."""
+    if (source or "bot") != "site":
+        return None
+    saved = get_subscription_issued_access(subscription_id) if subscription_id else None
+    if isinstance(saved, dict) and saved.get("delivered"):
+        return saved
+    delivery = get_latest_site_delivery_for_user(user_id, product_id)
+    if isinstance(delivery, dict) and delivery.get("delivered") and subscription_id:
+        save_subscription_issued_access(subscription_id, delivery)
+        return delivery
+    return {"autoIssue": True, "delivered": False}
+
+
 async def notify_user_payment_success(user_id: int, product_name: str, amount: float, months: int,
                                      invoice_id: str = None, masked_card: str = None, card_token: str = None,
-                                     source: str = "bot"):
+                                     source: str = "bot", product_id: int | None = None,
+                                     subscription_id: int | None = None):
     try:
         next_date_str = (datetime.now() + timedelta(days=30 * months)).strftime('%d.%m.%Y')
+        site_delivery = _issued_account_for_renewal(user_id, product_id, source, subscription_id)
         await bot.send_message(
             user_id,
             get_user_auto_payment_success_text(product_name, amount, months, next_date_str),
@@ -524,6 +547,7 @@ async def notify_user_payment_success(user_id: int, product_name: str, amount: f
                 get_admin_auto_payment_success_text(
                     user_id, username, product_name, amount, months, next_date_str,
                     invoice_info, card_info, token_info, source,
+                    site_delivery=site_delivery,
                 ),
                 parse_mode="HTML",
                 reply_markup=get_write_to_user_keyboard(user_id),
@@ -669,7 +693,7 @@ async def check_processing_payments():
         # Знаходимо платежі в статусі processing, які створені більше 5 хвилин тому
         cursor.execute("""
             SELECT sp.id, sp.subscription_id, sp.user_id, sp.invoice_id, sp.payment_id, sp.amount,
-                   rs.product_name, rs.months, rs.price
+                   rs.product_name, rs.months, rs.price, rs.product_id
             FROM subscription_payments sp
             JOIN recurring_subscriptions rs ON sp.subscription_id = rs.id
             WHERE sp.status = 'processing'
@@ -684,7 +708,7 @@ async def check_processing_payments():
         payment_manager = PaymentManager()
         
         for payment in processing_payments:
-            payment_db_id, subscription_id, user_id, invoice_id, local_payment_id, amount, product_name, months, price = payment
+            payment_db_id, subscription_id, user_id, invoice_id, local_payment_id, amount, product_name, months, price, product_id = payment
             
             try:
                 logging.info(f"🔍 Перевірка платежу {invoice_id} для підписки {subscription_id}")
@@ -747,6 +771,8 @@ async def check_processing_payments():
                         masked_card=masked_card,
                         card_token=card_token,
                         source=_subscription_source(subscription_id),
+                        product_id=product_id,
+                        subscription_id=subscription_id,
                     )
                     
                 elif current_status == 'failure':

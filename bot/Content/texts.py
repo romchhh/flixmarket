@@ -407,6 +407,27 @@ def format_admin_site_delivery_block(site_delivery: dict | None) -> str:
         return "\n\nℹ️ Автовидача вимкнена — доступ видає менеджер у Telegram."
     if site_delivery.get("delivered"):
         lines = ["\n\n✅ <b>Автовидача зі складу сайту</b>"]
+        parts = site_delivery.get("parts")
+        if isinstance(parts, list) and parts:
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                label = part.get("partLabel") or part.get("label")
+                if label:
+                    lines.append(f"\n<b>{label}</b>")
+                login = part.get("login")
+                password = part.get("password")
+                profile = part.get("profileName")
+                pin = part.get("pin")
+                if login:
+                    lines.append(f"• Логін: <code>{login}</code>")
+                if password:
+                    lines.append(f"• Пароль: <code>{password}</code>")
+                if profile:
+                    lines.append(f"• Профіль: <b>{profile}</b>")
+                if pin:
+                    lines.append(f"• PIN: <code>{pin}</code>")
+            return "\n".join(lines)
         login = site_delivery.get("login")
         password = site_delivery.get("password")
         profile = site_delivery.get("profileName")
@@ -531,9 +552,13 @@ def get_admin_auto_payment_success_text(
     card_info: str,
     token_info: str,
     source: str | None = "bot",
+    site_delivery: dict | None = None,
 ) -> str:
     """Текст адміну: автоматичний платіж успішно проведено."""
     m = _months_word(months)
+    extra = ""
+    if normalize_purchase_source(source) == "site":
+        extra = format_admin_site_delivery_block(site_delivery)
     return (
         f"🔄 <b>Автоматичний платіж успішно проведено</b>\n\n"
         f"{format_admin_source_line(source)}\n"
@@ -545,6 +570,7 @@ def get_admin_auto_payment_success_text(
         f"{invoice_info}"
         f"{card_info}"
         f"{token_info}"
+        f"{extra}"
     )
 
 
