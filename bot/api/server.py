@@ -508,8 +508,8 @@ async def card_rebind_start(request):
     except (TypeError, ValueError):
         return _json({"error": "sub_id required"}, 400)
     sub = get_recurring_subscription(sub_id, user_id)
-    if not sub or (sub.get("status") or "") != "active":
-        return _json({"error": "Активну підписку не знайдено"}, 404)
+    if not sub:
+        return _json({"error": "Підписку не знайдено"}, 404)
     if not redirect_url:
         return _json({"error": "redirect_url required"}, 400)
 
