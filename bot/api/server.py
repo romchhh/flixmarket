@@ -775,6 +775,77 @@ async def admin_products(_request):
     return _json({"products": [serialize_product(p, _public_url()) for p in get_all_products()]})
 
 
+async def admin_grant_test_subscription(request):
+    """Активна тестова підписка, щоб перевірити зміну картки. Наступне списання далеко, щоб крон не чіпав фейковий токен."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        user_id = int(body.get("user_id") or request.match_info.get("user_id"))
+    except (TypeError, ValueError):
+        return _json({"error": "user_id required"}, 400)
+    if not get_user_row(user_id) and not check_user(user_id):
+        return _json({"error": "Користувача не знайдено"}, 404)
+
+    product_id = int(body.get("product_id") or 62)
+    product = get_product_full(product_id)
+    name = (body.get("name") or (product or {}).get("product_name") or "Тест зміни картки").strip()
+    months = int(body.get("months") or 1)
+    price = float(body.get("price") if body.get("price") is not None else 1)
+
+    token = get_user_token(user_id)
+    wallet_id = (token[0] if token else None) or f"wallet_{user_id}_test"
+    if not token:
+        from database.client_db import save_user_token
+        save_user_token(user_id, wallet_id, "test_card_token", "**** **** **** 1234", "visa")
+
+    from database.client_db import create_recurring_subscription, cursor, conn
+    ok = create_recurring_subscription(
+        user_id=user_id,
+        product_id=product_id,
+        product_name=name,
+        months=months,
+        price=price,
+        wallet_id=wallet_id,
+        source="site",
+    )
+    if not ok:
+        return _json({"error": "Не вдалось створити підписку"}, 500)
+    cursor.execute(
+        """
+        UPDATE recurring_subscriptions
+        SET next_payment_date = datetime('now', '+45 days'),
+            status = 'active',
+            updated_at = datetime('now')
+        WHERE id = (SELECT MAX(id) FROM recurring_subscriptions WHERE user_id = ?)
+        """,
+        (user_id,),
+    )
+    conn.commit()
+    cursor.execute(
+        """
+        SELECT id, product_name, price, months, status, next_payment_date
+        FROM recurring_subscriptions
+        WHERE user_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    )
+    row = cursor.fetchone()
+    return _json({
+        "ok": True,
+        "id": row[0],
+        "name": row[1],
+        "price": row[2],
+        "months": row[3],
+        "status": row[4],
+        "nextPaymentAt": row[5],
+        "maskedCard": (token[2] if token else "**** **** **** 1234"),
+    })
+
+
 def build_app() -> web.Application:
     app = web.Application(middlewares=[cors_middleware, api_key_middleware])
     app.router.add_get("/api/v1/health", health)
@@ -808,6 +879,7 @@ def build_app() -> web.Application:
     app.router.add_get("/api/v1/admin/payments", admin_payments)
     app.router.add_get("/api/v1/admin/categories", admin_categories)
     app.router.add_get("/api/v1/admin/products", admin_products)
+    app.router.add_post("/api/v1/admin/subscriptions/grant", admin_grant_test_subscription)
     return app
 
 
