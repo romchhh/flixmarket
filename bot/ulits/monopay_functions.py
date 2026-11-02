@@ -118,6 +118,45 @@ class PaymentManager:
         else:
             raise Exception(f"Помилка створення платежу: {response.text}")
 
+    def create_card_rebind_hold(self, user_id: int, wallet_id: str, redirect_url: str) -> tuple[str, str, str]:
+        """Холд 1 грн, щоб зберегти нову картку. Гроші не списуються — холд знімається після токена."""
+        local_payment_id = f"rebind_{user_id}_{int(datetime.now().timestamp())}"
+        payload = {
+            "amount": 100,
+            "ccy": 980,
+            "merchantPaymInfo": {
+                "reference": local_payment_id,
+                "destination": "Підтвердження нової картки",
+                "comment": "Блокування 1 грн для зміни картки. Кошти не списуються.",
+                "basketOrder": [
+                    {
+                        "name": "Підтвердження картки",
+                        "qty": 1,
+                        "sum": 100,
+                        "total": 100,
+                        "unit": "шт.",
+                        "code": "card_rebind",
+                    }
+                ],
+            },
+            "redirectUrl": redirect_url,
+            "validity": 3600,
+            "paymentType": "hold",
+            "saveCardData": {
+                "saveCard": True,
+                "walletId": wallet_id,
+            },
+        }
+        webhook = default_webhook_url()
+        if webhook:
+            payload["webHookUrl"] = webhook
+        headers = {"X-Token": self.token, "Content-Type": "application/json"}
+        response = requests.post(f"{self.host}api/merchant/invoice/create", json=payload, headers=headers)
+        if response.status_code == 200:
+            result = response.json()
+            return local_payment_id, result["invoiceId"], result["pageUrl"]
+        raise Exception(f"Помилка холду для зміни картки: {response.text}")
+
     def create_payment_with_tokenization(self, user_id: int, product_name: str, months: int, price: float, redirect_url: str | None = None) -> tuple[str, str, str, str]:
         """Створює платіж з токенізацією картки для підписки"""
         local_payment_id = f"subscription_{user_id}_{int(datetime.now().timestamp())}"
@@ -309,6 +348,90 @@ class PaymentManager:
         
         
         
+def card_from_invoice_status(payment_data: dict) -> tuple[str | None, str, str, str | None]:
+    """Дістає токен і маску з відповіді статусу рахунку. Чиста функція — без запитів."""
+    wallet = payment_data.get("walletData") if isinstance(payment_data, dict) else None
+    token = None
+    wallet_id = None
+    if isinstance(wallet, dict):
+        token = wallet.get("cardToken") or None
+        wallet_id = wallet.get("walletId") or None
+        if wallet.get("status") == "failed":
+            token = None
+    info = payment_data.get("paymentInfo") if isinstance(payment_data, dict) else None
+    masked = ""
+    card_type = ""
+    if isinstance(info, dict):
+        masked = str(info.get("maskedPan") or "")
+        card_type = str(info.get("paymentSystem") or "")
+    return token, masked, card_type, wallet_id
+
+
+def apply_rebind_token(user_id: int, wallet_id: str, card_token: str, masked_card: str, card_type: str) -> None:
+    """Підміняє токен картки. Строк підписки не змінюється."""
+    from database.client_db import save_user_token
+    save_user_token(user_id, wallet_id, card_token, masked_card or "****", card_type or "unknown")
+    cursor.execute(
+        """
+        UPDATE recurring_subscriptions
+        SET wallet_id = ?, updated_at = datetime('now')
+        WHERE user_id = ? AND status = 'active'
+        """,
+        (wallet_id, user_id),
+    )
+    conn.commit()
+
+
+async def finish_card_rebind(invoice_id: str, payment_data: dict, user_id: int, payment_manager: PaymentManager) -> dict:
+    """Зберігає новий токен і знімає холд. Повертає {ok, pending?, maskedCard?, error?}."""
+    token, masked, card_type, wallet_from_mono = card_from_invoice_status(payment_data)
+    cursor.execute(
+        "SELECT wallet_id FROM payments_temp_data WHERE invoice_id = ?",
+        (invoice_id,),
+    )
+    row = cursor.fetchone()
+    wallet_id = (row[0] if row else None) or wallet_from_mono
+    if not token and wallet_id:
+        try:
+            cards = payment_manager.get_wallet_cards(wallet_id)
+            if isinstance(cards, dict):
+                cards = cards.get("wallet") or cards.get("cards") or []
+            if cards:
+                last = cards[-1]
+                token = last.get("cardToken") or last.get("token")
+                masked = masked or str(last.get("maskedPan") or "")
+        except Exception as exc:
+            logging.warning("rebind wallet cards %s: %s", invoice_id, exc)
+    if not token or not wallet_id:
+        return {"ok": False, "pending": True, "error": "Токен картки ще не готовий"}
+
+    apply_rebind_token(user_id, wallet_id, token, masked, card_type)
+    released = payment_manager.cancel_payment(invoice_id)
+    if not released:
+        logging.error("Не вдалось зняти холд %s після збереження токена", invoice_id)
+        return {
+            "ok": False,
+            "pending": True,
+            "error": "Картку збережено, блокування ще знімається",
+            "maskedCard": masked,
+        }
+
+    update_payment_status(invoice_id, "reversed")
+    cursor.execute("DELETE FROM payments_temp_data WHERE invoice_id = ?", (invoice_id,))
+    conn.commit()
+    if int(user_id) > 0:
+        try:
+            await bot.send_message(
+                user_id,
+                f"💳 Картку для автосписання змінено на <b>{masked or 'нову'}</b>.\n"
+                f"Блокування 1 грн знято. Дата наступного списання не змінилась.",
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logging.warning("rebind notify %s: %s", user_id, exc)
+    return {"ok": True, "maskedCard": masked, "cardType": card_type, "released": True}
+
+
 async def check_pending_payments():
     payment_manager = PaymentManager()
     
@@ -343,11 +466,26 @@ async def check_pending_payments():
                 logging.info(f"Статус платежу {invoice_id} з API: {status}")
                 logging.info(f"Дані платежу від Monobank: {payment_data}")
                 
+                if payment_type == "card_rebind":
+                    if status in ("hold", "success"):
+                        result = await finish_card_rebind(invoice_id, payment_data, user_id, payment_manager)
+                        logging.info("card rebind %s: %s", invoice_id, result)
+                    elif status in ("failure", "expired", "reversed", "cancelled", "canceled"):
+                        update_payment_status(invoice_id, status if status != "canceled" else "cancelled")
+                    else:
+                        logging.info("card rebind %s ще в статусі %s", invoice_id, status)
+                    continue
+
                 if status == "success":
                     logging.info(f"Платіж {invoice_id} успішний. Оновлення статусу")
                     
                     username = get_username_by_id(user_id)
                     update_payment_status(invoice_id, "success")
+                    try:
+                        from ulits.payment_create import mark_payment_promo_used
+                        mark_payment_promo_used(invoice_id)
+                    except Exception as promo_exc:
+                        logging.warning("promo mark used %s: %s", invoice_id, promo_exc)
                     site_delivery = await resolve_site_delivery_for_notify(invoice_id, purchase_source)
                     track_link_purchase(user_id)
 

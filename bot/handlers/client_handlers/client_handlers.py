@@ -3,7 +3,9 @@ from aiogram.types import FSInputFile, InputMediaPhoto, InlineKeyboardButton, In
 from config import administrators, token as BOT_TOKEN, normalize_bot_token, SITE_URL, WEB_SITE_URL, admin_chat_id, MIN_WITHDRAWAL, CATALOG_IMAGE_PATH
 from main import bot, scheduler
 from aiogram.filters import Command, CommandObject
-from keyboards.client_keyboards import get_start_keyboard, get_socials_keyboard, get_manager_keyboard, get_catalog_keyboard, get_products_keyboard, get_product_info_keyboard, get_payment_keyboard, get_payment_choice_keyboard, get_profile_keyboard, get_back_to_profile_keyboard, get_referral_keyboard, get_contest_keyboard
+from keyboards.client_keyboards import get_start_keyboard, get_socials_keyboard, get_manager_keyboard, get_catalog_keyboard, get_products_keyboard, get_product_info_keyboard, get_payment_keyboard, get_payment_choice_keyboard, get_one_time_confirm_keyboard, get_profile_keyboard, get_back_to_profile_keyboard, get_referral_keyboard, get_contest_keyboard
+from keyboards.admin_keyboards import cancel_button
+from ulits.admin_states import ClientPromoStates
 from Content.texts import get_greeting_message, get_about_text, get_faq_text, get_manager_text, get_help_text, get_referral_text, get_contest_text, MENU_EMOJI_IDS, get_calendar_emoji_html, get_tv_emoji_html, get_person_emoji_html, get_premium_emoji, format_date, format_product_name_for_display
 from database.client_db import create_table, check_user, add_user, create_products_table, get_product_by_id, save_payment_info, create_payments_table, create_subscriptions_table, get_user_info, get_user_subscriptions, get_user_recurring_subscriptions, get_user_name, cursor, conn, create_contest_table, get_partner_balance, get_partner_referral_percent, get_partner_earnings_history, create_withdrawal_request, deduct_partner_balance, add_subscription, get_product_type, confirm_web_login, get_web_login, issue_link_code
 from database.links_db import LINK_START_PREFIX, increment_link_count, link_exists
@@ -683,6 +685,112 @@ async def show_product_info(callback: types.CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("promo_ask_"))
+async def promo_ask(callback: types.CallbackQuery, state: FSMContext):
+    _, _, product_id, months, price = callback.data.split("_", 4)
+    product_id, months, price = int(product_id), int(months), float(price)
+    await state.set_state(ClientPromoStates.waiting_for_code)
+    await state.update_data(promo_product_id=product_id, promo_months=months, promo_price=price)
+    await callback.message.answer(
+        "Введи промокод (або натисни «Скасувати»):",
+        reply_markup=cancel_button(),
+    )
+    await callback.answer()
+
+
+@router.message(ClientPromoStates.waiting_for_code)
+async def promo_code_entered(message: types.Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if text in ("Скасувати", "❌ Скасувати"):
+        data = await state.get_data()
+        await state.clear()
+        pid = data.get("promo_product_id")
+        months = data.get("promo_months")
+        price = data.get("promo_price")
+        await message.answer("Скасовано.", reply_markup=get_start_keyboard())
+        if pid and months and price is not None:
+            await message.answer(
+                "Продовжити оформлення:",
+                reply_markup=get_one_time_confirm_keyboard(int(pid), int(months), float(price)),
+            )
+        return
+
+    data = await state.get_data()
+    product_id = int(data.get("promo_product_id") or 0)
+    months = int(data.get("promo_months") or 0)
+    base_price = float(data.get("promo_price") or 0)
+    if not product_id or not months:
+        await state.clear()
+        await message.answer("Сесію втрачено. Обери товар знову.", reply_markup=get_start_keyboard())
+        return
+
+    from database.promo_db import apply_promo_to_price, validate_promo_code
+    from ulits.payment_create import create_invoice_for_user
+
+    validated = validate_promo_code(text)
+    if not validated.get("ok"):
+        await message.answer(validated.get("message") or "Невірний промокод. Спробуй ще:")
+        return
+
+    promo = validated["promo"]
+    pricing = apply_promo_to_price(base_price=base_price, promo=promo, months=months)
+    final_months = int(pricing["months"])
+    final_price = float(pricing["priceAfterPromo"])
+    await state.clear()
+
+    if promo.get("type") == "free" or final_price <= 0:
+        try:
+            create_invoice_for_user(
+                user_id=message.from_user.id,
+                product_id=product_id,
+                months=final_months,
+                source="bot",
+                promo_code=promo["code"],
+            )
+        except ValueError as e:
+            await message.answer(f"❌ {e}", reply_markup=get_start_keyboard())
+            return
+        product = get_product_by_id(product_id)
+        name = product[0] if product else "Підписка"
+        await message.answer(
+            f"✅ Промокод <b>{promo['code']}</b> активовано!\n"
+            f"Товар: <b>{name}</b>\n"
+            f"Період: <b>{final_months} міс.</b>\n"
+            f"Оплата не потрібна.",
+            parse_mode="HTML",
+            reply_markup=get_start_keyboard(),
+        )
+        return
+
+    product = get_product_by_id(product_id)
+    name = product[0] if product else "Підписка"
+    await message.answer(
+        f"✅ Промокод <b>{promo['code']}</b>\n"
+        f"Товар: <b>{name}</b>\n"
+        f"Було: <s>{base_price}₴</s> → <b>{final_price}₴</b>\n\n"
+        f"Створюємо рахунок…",
+        parse_mode="HTML",
+        reply_markup=get_start_keyboard(),
+    )
+    try:
+        result = create_invoice_for_user(
+            user_id=message.from_user.id,
+            product_id=product_id,
+            months=months,
+            source="bot",
+            promo_code=promo["code"],
+        )
+    except ValueError as e:
+        await message.answer(f"❌ {e}")
+        return
+    if result.get("page_url"):
+        await message.answer(
+            f"Сума до сплати: <b>{result['amount']}₴</b>",
+            parse_mode="HTML",
+            reply_markup=get_payment_keyboard(result["page_url"], product_id),
+        )
+
+
 @router.callback_query(F.data.startswith("buy_"))
 async def process_buy(callback: types.CallbackQuery):
     _, product_id, months, price = callback.data.split("_")
@@ -758,25 +866,10 @@ async def process_buy(callback: types.CallbackQuery):
                 parse_mode="HTML",
             )
         else:
-            local_payment_id, invoice_id, payment_link = payment_manager.create_payment(
-                user_id=user_id,
-                product_name=product_name,
-                months=months,
-                price=discounted_price,
-            )
-            save_payment_info(
-                payment_id=local_payment_id,
-                invoice_id=invoice_id,
-                user_id=user_id,
-                product_id=product_id,
-                months=months,
-                amount=discounted_price,
-                status="pending",
-                payment_type=payment_type,
-            )
+            # Не створюємо рахунок одразу — даємо шанс ввести промокод
             await callback.message.edit_caption(
                 caption=payment_text,
-                reply_markup=get_payment_keyboard(payment_link, product_id),
+                reply_markup=get_one_time_confirm_keyboard(product_id, months, discounted_price),
                 parse_mode="HTML",
             )
     

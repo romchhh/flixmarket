@@ -15,10 +15,98 @@ def admin_keyboard():
         [KeyboardButton(text="Управління підписками")],
         [KeyboardButton(text="Управління товарами"), KeyboardButton(text="➕ Додати товар")],
         [KeyboardButton(text="👥 Партнерська програма") , KeyboardButton(text="Посилання")],
-        [KeyboardButton(text="Головне меню")],
+        [KeyboardButton(text="Промокоди"), KeyboardButton(text="Головне меню")],
     ]
     keyboard = ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
     return keyboard
+
+
+def get_promos_keyboard(promos: list) -> InlineKeyboardMarkup:
+    keyboard = []
+    for promo in promos:
+        status = "✅"
+        if promo.get("used_at") or promo.get("used_by"):
+            status = "🔒"
+        elif not promo.get("is_active"):
+            status = "❌"
+        if promo.get("promo_type") == "percent":
+            label = f"{status} {promo['code']} (−{float(promo.get('discount_percent') or 0):.0f}%)"
+        else:
+            label = f"{status} {promo['code']} (free {promo.get('free_months')}м)"
+        keyboard.append([
+            InlineKeyboardButton(text=label[:64], callback_data=f"promo_view_{promo['id']}")
+        ])
+    keyboard.append([
+        InlineKeyboardButton(text="➕ Створити промокод", callback_data="promo_create")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_promo_create_type_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📉 Знижка у %", callback_data="promo_type_percent")],
+            [InlineKeyboardButton(text="🎁 Безкоштовний доступ", callback_data="promo_type_free")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="promo_back_list")],
+        ]
+    )
+
+
+def get_promo_free_months_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="1 міс.", callback_data="promo_free_1"),
+                InlineKeyboardButton(text="3 міс.", callback_data="promo_free_3"),
+            ],
+            [
+                InlineKeyboardButton(text="6 міс.", callback_data="promo_free_6"),
+                InlineKeyboardButton(text="12 міс.", callback_data="promo_free_12"),
+            ],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="promo_create")],
+        ]
+    )
+
+
+def get_promo_expiry_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="♾ Безстроковий", callback_data="promo_expiry_none")],
+            [InlineKeyboardButton(text="📅 Вказати дату", callback_data="promo_expiry_date")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="promo_create")],
+        ]
+    )
+
+
+def get_promo_code_input_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎲 Згенерувати автоматично", callback_data="promo_code_auto")],
+            [InlineKeyboardButton(text="✏️ Ввести свій код", callback_data="promo_code_custom")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="promo_create")],
+        ]
+    )
+
+
+def get_promo_view_keyboard(promo_id: int, *, can_delete: bool) -> InlineKeyboardMarkup:
+    rows = []
+    if can_delete:
+        rows.append([
+            InlineKeyboardButton(text="🗑 Видалити", callback_data=f"promo_delete_{promo_id}")
+        ])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="promo_back_list")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_promo_delete_confirm_keyboard(promo_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Так", callback_data=f"promo_confirm_delete_{promo_id}"),
+                InlineKeyboardButton(text="❌ Ні", callback_data=f"promo_view_{promo_id}"),
+            ]
+        ]
+    )
 
 
 def create_post(user_data, user_id, url_buttons=None):

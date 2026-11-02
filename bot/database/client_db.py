@@ -448,13 +448,29 @@ def create_payments_table():
     ''')
     conn.commit()
 
-def save_payment_info(payment_id: str, invoice_id: str, user_id: int, product_id: int, months: int, amount: float, status: str, payment_type: str = 'one_time', source: str = 'bot') -> bool:
+def save_payment_info(
+    payment_id: str,
+    invoice_id: str,
+    user_id: int,
+    product_id: int,
+    months: int,
+    amount: float,
+    status: str,
+    payment_type: str = 'one_time',
+    source: str = 'bot',
+    promo_code_id: int | None = None,
+    promo_code: str | None = None,
+    promo_amount_saved: float | None = None,
+) -> bool:
     migrate_payments_site_delivery()
+    from database.promo_db import migrate_payments_promo_columns
+    migrate_payments_promo_columns()
     try:
         cursor.execute("""
             INSERT INTO payments (
-                payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, source, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, source,
+                promo_code_id, promo_code, promo_amount_saved, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(invoice_id) DO UPDATE SET
                 payment_id = excluded.payment_id,
                 user_id = excluded.user_id,
@@ -464,13 +480,47 @@ def save_payment_info(payment_id: str, invoice_id: str, user_id: int, product_id
                 status = excluded.status,
                 payment_type = excluded.payment_type,
                 source = excluded.source,
+                promo_code_id = COALESCE(excluded.promo_code_id, payments.promo_code_id),
+                promo_code = COALESCE(excluded.promo_code, payments.promo_code),
+                promo_amount_saved = COALESCE(excluded.promo_amount_saved, payments.promo_amount_saved),
                 updated_at = datetime('now')
-        """, (payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, source))
+        """, (
+            payment_id, invoice_id, user_id, product_id, months, amount, status, payment_type, source,
+            promo_code_id, promo_code, promo_amount_saved,
+        ))
         conn.commit()
         return True
     except sqlite3.Error as e:
         print(f"Помилка при збереженні платежу: {e}")
         return False
+
+
+def get_payment_promo(invoice_id: str) -> dict | None:
+    from database.promo_db import migrate_payments_promo_columns
+    migrate_payments_promo_columns()
+    try:
+        cursor.execute(
+            """
+            SELECT promo_code_id, promo_code, promo_amount_saved, user_id, months, amount, payment_id
+            FROM payments
+            WHERE invoice_id = ? OR payment_id = ?
+            """,
+            (invoice_id, invoice_id),
+        )
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            return None
+        return {
+            "promo_code_id": row[0],
+            "promo_code": row[1],
+            "promo_amount_saved": row[2],
+            "user_id": row[3],
+            "months": row[4],
+            "amount": row[5],
+            "payment_id": row[6],
+        }
+    except sqlite3.Error:
+        return None
 
 
 def save_site_delivery(invoice_id: str, delivery: dict | None) -> bool:
@@ -1863,3 +1913,6 @@ def create_tables():
     enable_wal()
     from database.links_db import create_table_links
     create_table_links()
+    from database.promo_db import create_table_promo_codes, migrate_payments_promo_columns
+    create_table_promo_codes()
+    migrate_payments_promo_columns()

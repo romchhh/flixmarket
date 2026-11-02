@@ -139,6 +139,27 @@ def get_payment_keyboard(payment_link: str, product_id: int) -> InlineKeyboardMa
     return keyboard
 
 
+def get_one_time_confirm_keyboard(product_id: int, months: int, price: float) -> InlineKeyboardMarkup:
+    """Підтвердження одноразової оплати + опційний промокод."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="💳 Оплатити карткою",
+                callback_data=f"one_time_card_{product_id}_{months}_{price}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎟 Ввести промокод",
+                callback_data=f"promo_ask_{product_id}_{months}_{price}"
+            )
+        ],
+        [
+            InlineKeyboardButton(text="← Назад", callback_data=f"product_{product_id}")
+        ],
+    ])
+
+
 def get_payment_choice_keyboard(product_id: int, months: int, price: float) -> InlineKeyboardMarkup:
     """Клавіатура вибору: оплата карткою або з партнерського балансу."""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -152,6 +173,12 @@ def get_payment_choice_keyboard(product_id: int, months: int, price: float) -> I
             InlineKeyboardButton(
                 text="💰 Сплатити з балансу",
                 callback_data=f"pay_balance_{product_id}_{months}_{price}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎟 Промокод",
+                callback_data=f"promo_ask_{product_id}_{months}_{price}"
             )
         ],
         [
@@ -198,6 +225,12 @@ def get_subscription_terms_keyboard(product_id: int, months: int, price: float) 
             InlineKeyboardButton(
                 text="✅ Погоджуюся з умовами",
                 callback_data=f"agree_subscription_{product_id}_{months}_{price}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎟 Промокод",
+                callback_data=f"promo_ask_{product_id}_{months}_{price}"
             )
         ],
         [

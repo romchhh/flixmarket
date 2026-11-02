@@ -33,3 +33,13 @@ class SearchSubscription(StatesGroup):
 class LinkStates(StatesGroup):
     waiting_for_name = State()
     waiting_for_edit_name = State()
+
+
+class PromoStates(StatesGroup):
+    waiting_for_percent = State()
+    waiting_for_expiry_date = State()
+    waiting_for_custom_code = State()
+
+
+class ClientPromoStates(StatesGroup):
+    waiting_for_code = State()

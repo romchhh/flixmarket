@@ -36,7 +36,8 @@ from database.client_db import (
     merge_site_user_to_telegram,
     set_user_email,
 )
-from ulits.payment_create import create_invoice_for_user, record_invoice_for_user
+from database.promo_db import apply_promo_to_price, validate_promo_code
+from ulits.payment_create import create_invoice_for_user, parse_tariffs, price_for_months, record_invoice_for_user
 from ulits.path_utils import resolve_media_path
 
 from .catalog import serialize_category, serialize_product, slug_for
@@ -429,6 +430,175 @@ async def cancel_recurring(request):
     return _json({"ok": True, "status": "inactive"})
 
 
+async def promo_validate(request):
+    body = await request.json()
+    code = str(body.get("code") or body.get("promoCode") or "").strip()
+    if not code:
+        return _json({"ok": False, "error": "empty", "message": "Введіть промокод"}, 400)
+    result = validate_promo_code(code)
+    if not result.get("ok"):
+        return _json(result, 400)
+
+    months = body.get("months")
+    product_id = body.get("product_id") or body.get("productId")
+    base_amount = body.get("amount")
+    try:
+        months_i = int(months) if months is not None else None
+    except (TypeError, ValueError):
+        months_i = None
+    try:
+        product_id_i = int(product_id) if product_id is not None else None
+    except (TypeError, ValueError):
+        product_id_i = None
+
+    pricing = None
+    promo = result["promo"]
+    base = float(base_amount) if base_amount is not None else None
+    use_months = months_i
+
+    if product_id_i and (promo.get("type") == "free" or base is None):
+        product = get_product_full(product_id_i)
+        if product:
+            if promo.get("type") == "free" and promo.get("freeMonths"):
+                free_m = int(promo["freeMonths"])
+                use_months = free_m
+                base_free = price_for_months(product, free_m)
+                if base_free is not None:
+                    base = float(base_free)
+                elif base is None:
+                    tariffs = parse_tariffs(product.get("product_price"))
+                    if tariffs:
+                        per = min((p / m for m, p in tariffs if m > 0), default=tariffs[0][1])
+                        base = round(per * free_m, 2)
+            elif use_months:
+                found = price_for_months(product, use_months)
+                if found is not None:
+                    base = float(found)
+
+    if base is not None and use_months:
+        try:
+            pricing = apply_promo_to_price(
+                base_price=base,
+                promo=promo,
+                months=use_months,
+            )
+        except Exception:
+            pricing = None
+
+    payload = {**result}
+    if pricing:
+        payload["pricing"] = {
+            "months": pricing["months"],
+            "amount": pricing["priceAfterPromo"],
+            "amountSaved": pricing["amountSaved"],
+            "baseAmount": base,
+        }
+    return _json(payload)
+
+
+async def card_rebind_start(request):
+    user_id = int(request.match_info["user_id"])
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    redirect_url = (body.get("redirect_url") or "").strip()
+    try:
+        sub_id = int(body.get("sub_id") or body.get("subscription_id"))
+    except (TypeError, ValueError):
+        return _json({"error": "sub_id required"}, 400)
+    sub = get_recurring_subscription(sub_id, user_id)
+    if not sub or (sub.get("status") or "") != "active":
+        return _json({"error": "Активну підписку не знайдено"}, 404)
+    if not redirect_url:
+        return _json({"error": "redirect_url required"}, 400)
+
+    token = get_user_token(user_id)
+    wallet_id = (token[0] if token else None) or sub.get("wallet_id") or f"wallet_{user_id}_rebind"
+    from ulits.monopay_functions import PaymentManager
+    manager = PaymentManager()
+    try:
+        local_id, invoice_id, page_url = manager.create_card_rebind_hold(user_id, wallet_id, redirect_url)
+    except Exception as e:
+        log.exception("card rebind create")
+        return _json({"error": f"Не вдалось створити підтвердження картки: {e}"}, 502)
+
+    from database.client_db import save_payment_info
+    save_payment_info(
+        payment_id=local_id,
+        invoice_id=invoice_id,
+        user_id=user_id,
+        product_id=int(sub.get("product_id") or 0),
+        months=0,
+        amount=1,
+        status="pending",
+        payment_type="card_rebind",
+        source="site",
+    )
+    cursor_ok = True
+    try:
+        from database.client_db import cursor, conn
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO payments_temp_data (invoice_id, wallet_id, payment_type, local_payment_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (invoice_id, wallet_id, "card_rebind", local_id),
+        )
+        conn.commit()
+    except Exception:
+        log.exception("rebind temp")
+        cursor_ok = False
+    if not cursor_ok:
+        return _json({"error": "Не вдалось зберегти підтвердження"}, 500)
+    return _json({"ok": True, "pageUrl": page_url, "invoiceId": invoice_id, "amount": 1})
+
+
+async def card_rebind_finish(request):
+    user_id = int(request.match_info["user_id"])
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    invoice_id = str(body.get("invoice_id") or body.get("invoiceId") or "").strip()
+    if not invoice_id:
+        return _json({"error": "invoice_id required"}, 400)
+    info = get_full_payment(invoice_id)
+    if not info or int(info.get("user_id") or 0) != user_id:
+        return _json({"error": "Підтвердження не знайдено"}, 404)
+    if info.get("payment_type") != "card_rebind":
+        return _json({"error": "Це не зміна картки"}, 400)
+    if (info.get("status") or "") == "reversed":
+        token = get_user_token(user_id)
+        return _json({
+            "ok": True,
+            "done": True,
+            "maskedCard": token[2] if token else None,
+            "cardType": token[3] if token else None,
+        })
+
+    from ulits.monopay_functions import PaymentManager, finish_card_rebind
+    manager = PaymentManager()
+    try:
+        payment_data = manager.get_payment_status(invoice_id)
+    except Exception as e:
+        log.warning("rebind status %s: %s", invoice_id, e)
+        return _json({"ok": False, "pending": True, "error": "Статус ще не готовий"})
+    status = (payment_data.get("status") or "").lower()
+    if status in ("failure", "expired", "reversed"):
+        from database.client_db import update_payment_status
+        update_payment_status(invoice_id, "reversed" if status == "reversed" else status)
+        if status == "reversed":
+            token = get_user_token(user_id)
+            return _json({"ok": True, "done": True, "maskedCard": token[2] if token else None})
+        return _json({"ok": False, "error": "Оплату не підтверджено. Спробуй ще раз."})
+    if status not in ("hold", "success"):
+        return _json({"ok": False, "pending": True, "status": status})
+    result = await finish_card_rebind(invoice_id, payment_data, user_id, manager)
+    result["done"] = bool(result.get("ok"))
+    return _json(result, 200 if result.get("ok") or result.get("pending") else 502)
+
+
 async def payments_create(request):
     body = await request.json()
     try:
@@ -440,6 +610,7 @@ async def payments_create(request):
 
     source = body.get("source") or "site"
     redirect_url = body.get("redirect_url")
+    promo_code = (body.get("promo_code") or body.get("promoCode") or "").strip() or None
     if not redirect_url and SITE_URL and source == "site":
         redirect_url = f"{SITE_URL}/cabinet"
 
@@ -453,6 +624,7 @@ async def payments_create(request):
             months=months,
             source=source,
             redirect_url=redirect_url,
+            promo_code=promo_code,
         )
     except ValueError as e:
         return _json({"error": str(e)}, 400)
@@ -479,6 +651,18 @@ async def payments_record(request):
     if not get_user_row(user_id) and not check_user(user_id):
         add_user(user_id, body.get("username"), None)
 
+    promo_code = (body.get("promo_code") or body.get("promoCode") or "").strip() or None
+    promo_code_id = body.get("promo_code_id") or body.get("promoCodeId")
+    promo_amount_saved = body.get("promo_amount_saved") or body.get("promoAmountSaved")
+    try:
+        promo_code_id = int(promo_code_id) if promo_code_id is not None else None
+    except (TypeError, ValueError):
+        promo_code_id = None
+    try:
+        promo_amount_saved = float(promo_amount_saved) if promo_amount_saved is not None else None
+    except (TypeError, ValueError):
+        promo_amount_saved = None
+
     try:
         result = record_invoice_for_user(
             user_id=user_id,
@@ -490,6 +674,9 @@ async def payments_record(request):
             payment_type=body.get("payment_type") or "one_time",
             wallet_id=(body.get("wallet_id") or None),
             source=body.get("source") or "site",
+            promo_code=promo_code,
+            promo_code_id=promo_code_id,
+            promo_amount_saved=promo_amount_saved,
         )
     except ValueError as e:
         return _json({"error": str(e)}, 400)
@@ -606,7 +793,10 @@ def build_app() -> web.Application:
     app.router.add_get("/api/v1/users/{user_id}/subscriptions", users_subscriptions)
     app.router.add_get("/api/v1/users/{user_id}/payments", users_payments)
     app.router.add_post("/api/v1/users/{user_id}/recurring/{sub_id}/cancel", cancel_recurring)
+    app.router.add_post("/api/v1/users/{user_id}/card/rebind", card_rebind_start)
+    app.router.add_post("/api/v1/users/{user_id}/card/rebind/finish", card_rebind_finish)
 
+    app.router.add_post("/api/v1/promo/validate", promo_validate)
     app.router.add_post("/api/v1/payments", payments_create)
     app.router.add_post("/api/v1/payments/record", payments_record)
     app.router.add_post("/api/v1/payments/site-fulfill", payments_site_fulfill)
