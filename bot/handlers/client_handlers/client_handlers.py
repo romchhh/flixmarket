@@ -282,8 +282,9 @@ async def link_site_account(message: types.Message):
 
 
 @router.message(Command("start"))
-async def start(message: types.Message, command: CommandObject):
+async def start(message: types.Message, command: CommandObject, state: FSMContext):
     user_id = message.from_user.id
+    await state.clear()
 
     create_contest_table()
 
@@ -698,97 +699,108 @@ async def promo_ask(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(ClientPromoStates.waiting_for_code)
+@router.message(ClientPromoStates.waiting_for_code, F.text)
 async def promo_code_entered(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
     text = (message.text or "").strip()
-    if text in ("Скасувати", "❌ Скасувати"):
+    menu = get_start_keyboard(user_id)
+    try:
+        if text in ("Скасувати", "❌ Скасувати", "/cancel"):
+            data = await state.get_data()
+            await state.clear()
+            pid = data.get("promo_product_id")
+            months = data.get("promo_months")
+            price = data.get("promo_price")
+            await message.answer("Скасовано.", reply_markup=menu)
+            if pid and months and price is not None:
+                await message.answer(
+                    "Продовжити оформлення:",
+                    reply_markup=get_one_time_confirm_keyboard(int(pid), int(months), float(price)),
+                )
+            return
+
         data = await state.get_data()
+        product_id = int(data.get("promo_product_id") or 0)
+        months = int(data.get("promo_months") or 0)
+        base_price = float(data.get("promo_price") or 0)
+        if not product_id or not months:
+            await state.clear()
+            await message.answer("Сесію втрачено. Обери товар знову.", reply_markup=menu)
+            return
+
+        from database.promo_db import apply_promo_to_price, validate_promo_code
+        from ulits.payment_create import create_invoice_for_user
+
+        validated = validate_promo_code(text)
+        if not validated.get("ok"):
+            await message.answer(validated.get("message") or "Невірний промокод. Спробуй ще:")
+            return
+
+        promo = validated["promo"]
+        pricing = apply_promo_to_price(base_price=base_price, promo=promo, months=months)
+        final_months = int(pricing["months"])
+        final_price = float(pricing["priceAfterPromo"])
         await state.clear()
-        pid = data.get("promo_product_id")
-        months = data.get("promo_months")
-        price = data.get("promo_price")
-        await message.answer("Скасовано.", reply_markup=get_start_keyboard())
-        if pid and months and price is not None:
+
+        if promo.get("type") == "free" or final_price <= 0:
+            try:
+                create_invoice_for_user(
+                    user_id=user_id,
+                    product_id=product_id,
+                    months=final_months,
+                    source="bot",
+                    promo_code=promo["code"],
+                )
+            except ValueError as e:
+                await message.answer(f"❌ {e}", reply_markup=menu)
+                return
+            product = get_product_by_id(product_id)
+            name = product[0] if product else "Підписка"
             await message.answer(
-                "Продовжити оформлення:",
-                reply_markup=get_one_time_confirm_keyboard(int(pid), int(months), float(price)),
+                f"✅ Промокод <b>{promo['code']}</b> активовано!\n"
+                f"Товар: <b>{name}</b>\n"
+                f"Період: <b>{final_months} міс.</b>\n"
+                f"Оплата не потрібна.",
+                parse_mode="HTML",
+                reply_markup=menu,
             )
-        return
+            return
 
-    data = await state.get_data()
-    product_id = int(data.get("promo_product_id") or 0)
-    months = int(data.get("promo_months") or 0)
-    base_price = float(data.get("promo_price") or 0)
-    if not product_id or not months:
-        await state.clear()
-        await message.answer("Сесію втрачено. Обери товар знову.", reply_markup=get_start_keyboard())
-        return
-
-    from database.promo_db import apply_promo_to_price, validate_promo_code
-    from ulits.payment_create import create_invoice_for_user
-
-    validated = validate_promo_code(text)
-    if not validated.get("ok"):
-        await message.answer(validated.get("message") or "Невірний промокод. Спробуй ще:")
-        return
-
-    promo = validated["promo"]
-    pricing = apply_promo_to_price(base_price=base_price, promo=promo, months=months)
-    final_months = int(pricing["months"])
-    final_price = float(pricing["priceAfterPromo"])
-    await state.clear()
-
-    if promo.get("type") == "free" or final_price <= 0:
+        product = get_product_by_id(product_id)
+        name = product[0] if product else "Підписка"
+        await message.answer(
+            f"✅ Промокод <b>{promo['code']}</b>\n"
+            f"Товар: <b>{name}</b>\n"
+            f"Було: <s>{base_price}₴</s> → <b>{final_price}₴</b>\n\n"
+            f"Створюємо рахунок…",
+            parse_mode="HTML",
+            reply_markup=menu,
+        )
         try:
-            create_invoice_for_user(
-                user_id=message.from_user.id,
+            result = create_invoice_for_user(
+                user_id=user_id,
                 product_id=product_id,
-                months=final_months,
+                months=months,
                 source="bot",
                 promo_code=promo["code"],
             )
         except ValueError as e:
-            await message.answer(f"❌ {e}", reply_markup=get_start_keyboard())
+            await message.answer(f"❌ {e}", reply_markup=menu)
             return
-        product = get_product_by_id(product_id)
-        name = product[0] if product else "Підписка"
-        await message.answer(
-            f"✅ Промокод <b>{promo['code']}</b> активовано!\n"
-            f"Товар: <b>{name}</b>\n"
-            f"Період: <b>{final_months} міс.</b>\n"
-            f"Оплата не потрібна.",
-            parse_mode="HTML",
-            reply_markup=get_start_keyboard(),
-        )
-        return
-
-    product = get_product_by_id(product_id)
-    name = product[0] if product else "Підписка"
-    await message.answer(
-        f"✅ Промокод <b>{promo['code']}</b>\n"
-        f"Товар: <b>{name}</b>\n"
-        f"Було: <s>{base_price}₴</s> → <b>{final_price}₴</b>\n\n"
-        f"Створюємо рахунок…",
-        parse_mode="HTML",
-        reply_markup=get_start_keyboard(),
-    )
-    try:
-        result = create_invoice_for_user(
-            user_id=message.from_user.id,
-            product_id=product_id,
-            months=months,
-            source="bot",
-            promo_code=promo["code"],
-        )
-    except ValueError as e:
-        await message.answer(f"❌ {e}")
-        return
-    if result.get("page_url"):
-        await message.answer(
-            f"Сума до сплати: <b>{result['amount']}₴</b>",
-            parse_mode="HTML",
-            reply_markup=get_payment_keyboard(result["page_url"], product_id),
-        )
+        except Exception as e:
+            log.exception("promo invoice")
+            await message.answer(f"❌ Не вдалось створити рахунок: {e}", reply_markup=menu)
+            return
+        if result.get("page_url"):
+            await message.answer(
+                f"Сума до сплати: <b>{result['amount']}₴</b>",
+                parse_mode="HTML",
+                reply_markup=get_payment_keyboard(result["page_url"], product_id),
+            )
+    except Exception:
+        log.exception("promo_code_entered")
+        await state.clear()
+        await message.answer("Сталась помилка. Спробуй ще раз з каталогу.", reply_markup=menu)
 
 
 @router.callback_query(F.data.startswith("buy_"))
