@@ -55,6 +55,12 @@ def resolve_recurring_price(
     invoice_id: str | None = None,
 ) -> float:
     """Ціна наступних списань: повний тариф. Промо діє лише на перший платіж."""
+    product = get_product_full(product_id)
+    if product:
+        catalog = price_for_months(product, int(months))
+        if catalog is not None:
+            return float(catalog)
+
     if invoice_id:
         from database.client_db import get_payment_promo
 
@@ -63,11 +69,6 @@ def resolve_recurring_price(
         if saved is not None and float(saved) > 0:
             return round(float(paid_amount) + float(saved), 2)
 
-    product = get_product_full(product_id)
-    if product:
-        catalog = price_for_months(product, int(months))
-        if catalog is not None:
-            return float(catalog)
     return float(paid_amount)
 
 

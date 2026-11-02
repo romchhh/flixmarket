@@ -768,10 +768,17 @@ async def promo_code_entered(message: types.Message, state: FSMContext):
 
         product = get_product_by_id(product_id)
         name = product[0] if product else "Підписка"
+        from database.admin_db import get_product_payment_type
+        is_sub = (get_product_payment_type(product_id) or "") == "subscription"
+        renew_note = (
+            "\n<i>Знижка лише на першу оплату. Далі — повна ціна тарифу.</i>"
+            if is_sub else ""
+        )
         await message.answer(
             f"✅ Промокод <b>{promo['code']}</b>\n"
             f"Товар: <b>{name}</b>\n"
-            f"Було: <s>{base_price}₴</s> → <b>{final_price}₴</b>\n\n"
+            f"Було: <s>{base_price}₴</s> → <b>{final_price}₴</b>"
+            f"{renew_note}\n\n"
             f"Створюємо рахунок…",
             parse_mode="HTML",
             reply_markup=menu,
