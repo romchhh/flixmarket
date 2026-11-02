@@ -600,12 +600,25 @@ async def check_pending_payments():
                         if card_token:
                             logging.info(f"💳 Дані картки: token=..., masked={masked_card}, type={card_type}")
                             save_user_token(user_id, wallet_id, card_token, masked_card, card_type)
+                            from ulits.payment_create import resolve_recurring_price
+                            recurring_price = resolve_recurring_price(
+                                paid_amount=float(amount),
+                                product_id=int(product_id),
+                                months=int(months),
+                                invoice_id=str(invoice_id),
+                            )
+                            if recurring_price != float(amount):
+                                logging.info(
+                                    "Промо лише на перший платіж: paid=%s, next=%s",
+                                    amount,
+                                    recurring_price,
+                                )
                             create_recurring_subscription(
                                 user_id=user_id,
                                 product_id=product_id,
                                 product_name=product_name,
                                 months=months,
-                                price=amount,
+                                price=recurring_price,
                                 wallet_id=wallet_id,
                                 source=purchase_source,
                                 issued_access=site_delivery,
