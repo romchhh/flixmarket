@@ -29,10 +29,17 @@ def get_promos_keyboard(promos: list) -> InlineKeyboardMarkup:
             status = "🔒"
         elif not promo.get("is_active"):
             status = "❌"
+        max_uses = int(promo.get("max_uses") if promo.get("max_uses") is not None else 1)
+        use_count = int(promo.get("use_count") or 0)
+        multi = ""
+        if promo.get("promo_type") == "percent" and (max_uses == 0 or max_uses > 1):
+            multi = " ∞" if max_uses <= 0 else f" {use_count}/{max_uses}"
         if promo.get("promo_type") == "percent":
-            label = f"{status} {promo['code']} (−{float(promo.get('discount_percent') or 0):.0f}%)"
+            label = f"{status} {promo['code']} (−{float(promo.get('discount_percent') or 0):.0f}%{multi})"
         else:
-            label = f"{status} {promo['code']} (free {promo.get('free_months')}м)"
+            pid = promo.get("product_id")
+            bound = f"#{pid}" if pid else "?"
+            label = f"{status} {promo['code']} (free {promo.get('free_months')}м · {bound})"
         keyboard.append([
             InlineKeyboardButton(text=label[:64], callback_data=f"promo_view_{promo['id']}")
         ])
@@ -64,6 +71,57 @@ def get_promo_free_months_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="12 міс.", callback_data="promo_free_12"),
             ],
             [InlineKeyboardButton(text="◀️ Назад", callback_data="promo_create")],
+        ]
+    )
+
+
+def get_promo_products_keyboard(page: int = 0, page_size: int = 8) -> InlineKeyboardMarkup:
+    from database.client_db import get_all_products
+
+    products = get_all_products() or []
+    total = len(products)
+    page = max(0, int(page))
+    start = page * page_size
+    chunk = products[start : start + page_size]
+    rows: list[list[InlineKeyboardButton]] = []
+    for p in chunk:
+        pid = int(p.get("id"))
+        name = (p.get("product_name") or f"#{pid}").strip()
+        rows.append([
+            InlineKeyboardButton(text=name[:64], callback_data=f"promo_pickprod_{pid}")
+        ])
+    nav: list[InlineKeyboardButton] = []
+    if start > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"promo_prodpage_{page - 1}"))
+    if start + page_size < total:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"promo_prodpage_{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="promo_type_free")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_promo_usage_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="1️⃣ Одноразовий", callback_data="promo_usage_once")],
+            [InlineKeyboardButton(text="♻️ Багаторазовий", callback_data="promo_usage_multi")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="promo_create")],
+        ]
+    )
+
+
+def get_promo_max_uses_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="♾ Без ліміту", callback_data="promo_max_0")],
+            [
+                InlineKeyboardButton(text="10", callback_data="promo_max_10"),
+                InlineKeyboardButton(text="50", callback_data="promo_max_50"),
+                InlineKeyboardButton(text="100", callback_data="promo_max_100"),
+            ],
+            [InlineKeyboardButton(text="✏️ Ввести число", callback_data="promo_max_custom")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="promo_type_percent")],
         ]
     )
 

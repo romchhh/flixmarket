@@ -3,6 +3,7 @@ from datetime import datetime
 from aiogram import F, Router, types
 from aiogram.fsm.context import FSMContext
 
+from database.client_db import get_product_full
 from database.promo_db import (
     create_promo_code,
     delete_promo,
@@ -19,6 +20,9 @@ from keyboards.admin_keyboards import (
     get_promo_delete_confirm_keyboard,
     get_promo_expiry_keyboard,
     get_promo_free_months_keyboard,
+    get_promo_max_uses_keyboard,
+    get_promo_products_keyboard,
+    get_promo_usage_keyboard,
     get_promo_view_keyboard,
     get_promos_keyboard,
 )
@@ -31,8 +35,8 @@ router = Router()
 def _promos_list_text() -> str:
     return (
         "<b>🎟 Промокоди</b>\n\n"
-        "Кожен код унікальний і одноразовий.\n"
-        "Можна створити знижку у % або безкоштовний доступ на 1/3/6/12 міс."
+        "• <b>Безкоштовний доступ</b> — одноразовий і лише на вибраний товар.\n"
+        "• <b>Знижка у %</b> — одноразовий або багаторазовий."
     )
 
 
@@ -92,7 +96,11 @@ async def promo_delete_confirm(callback: types.CallbackQuery):
     if promo and promo_status(promo) == "used":
         await callback.answer("Не можна видалити використаний промокод", show_alert=True)
         return
-    delete_promo(promo_id)
+    try:
+        delete_promo(promo_id)
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
     await _show_promos_list(callback.message, edit=True)
     await callback.answer("Видалено")
 
@@ -111,7 +119,7 @@ async def promo_create_start(callback: types.CallbackQuery, state: FSMContext):
 @router.callback_query(IsAdmin(), F.data == "promo_type_percent")
 async def promo_type_percent(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(PromoStates.waiting_for_percent)
-    await state.update_data(promo_type="percent")
+    await state.update_data(promo_type="percent", product_id=None, max_uses=1)
     await callback.message.answer(
         "Введіть розмір знижки у % (від 1 до 100):",
         reply_markup=cancel_button(),
@@ -138,9 +146,81 @@ async def promo_percent_input(message: types.Message, state: FSMContext):
     if not (1 <= value <= 100):
         await message.answer("Знижка має бути від 1 до 100%:")
         return
-    await state.update_data(discount_percent=value)
+    await state.update_data(discount_percent=value, promo_type="percent")
     await message.answer(
-        f"Знижка: <b>{value:.0f}%</b>\n\nОберіть термін дії:",
+        f"Знижка: <b>{value:.0f}%</b>\n\nСкільки разів можна використати код?",
+        parse_mode="HTML",
+        reply_markup=get_promo_usage_keyboard(),
+    )
+
+
+@router.callback_query(IsAdmin(), F.data == "promo_usage_once")
+async def promo_usage_once(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(max_uses=1)
+    await callback.message.edit_text(
+        "Використання: <b>одноразовий</b>\n\nОберіть термін дії:",
+        parse_mode="HTML",
+        reply_markup=get_promo_expiry_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(IsAdmin(), F.data == "promo_usage_multi")
+async def promo_usage_multi(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "Багаторазовий код.\nОберіть ліміт використань:",
+        reply_markup=get_promo_max_uses_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(IsAdmin(), F.data.startswith("promo_max_"))
+async def promo_max_uses_pick(callback: types.CallbackQuery, state: FSMContext):
+    suffix = callback.data.replace("promo_max_", "", 1)
+    if suffix == "custom":
+        await state.set_state(PromoStates.waiting_for_max_uses)
+        await callback.message.answer(
+            "Введіть максимальну кількість використань (число ≥ 2):",
+            reply_markup=cancel_button(),
+        )
+        await callback.answer()
+        return
+    try:
+        max_uses = int(suffix)
+    except ValueError:
+        await callback.answer("Невірне значення", show_alert=True)
+        return
+    if max_uses < 0:
+        await callback.answer("Невірне значення", show_alert=True)
+        return
+    await state.update_data(max_uses=max_uses)
+    label = "без ліміту" if max_uses == 0 else f"до {max_uses} разів"
+    await callback.message.edit_text(
+        f"Використання: <b>{label}</b>\n\nОберіть термін дії:",
+        parse_mode="HTML",
+        reply_markup=get_promo_expiry_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(IsAdmin(), PromoStates.waiting_for_max_uses)
+async def promo_max_uses_input(message: types.Message, state: FSMContext):
+    if _is_cancel(message.text):
+        await state.clear()
+        await message.answer("Відміна", reply_markup=admin_keyboard())
+        await _show_promos_list(message)
+        return
+    try:
+        value = int((message.text or "").strip())
+    except ValueError:
+        await message.answer("Введіть ціле число ≥ 2:")
+        return
+    if value < 2:
+        await message.answer("Для багаторазового коду мінімум 2:")
+        return
+    await state.update_data(max_uses=value)
+    await message.answer(
+        f"Використання: <b>до {value} разів</b>\n\nОберіть термін дії:",
         parse_mode="HTML",
         reply_markup=get_promo_expiry_keyboard(),
     )
@@ -148,7 +228,7 @@ async def promo_percent_input(message: types.Message, state: FSMContext):
 
 @router.callback_query(IsAdmin(), F.data == "promo_type_free")
 async def promo_type_free(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(promo_type="free")
+    await state.update_data(promo_type="free", max_uses=1, product_id=None)
     await callback.message.edit_text(
         "<b>Безкоштовний доступ</b>\n\nОберіть період:",
         parse_mode="HTML",
@@ -163,9 +243,39 @@ async def promo_free_months(callback: types.CallbackQuery, state: FSMContext):
     if months not in (1, 3, 6, 12):
         await callback.answer("Невірний період", show_alert=True)
         return
-    await state.update_data(promo_type="free", free_months=months)
+    await state.update_data(promo_type="free", free_months=months, max_uses=1)
     await callback.message.edit_text(
-        f"Період: <b>{months} міс.</b>\n\nОберіть термін дії промокоду:",
+        f"Період: <b>{months} міс.</b>\n\nОберіть товар для цього промокоду:",
+        parse_mode="HTML",
+        reply_markup=get_promo_products_keyboard(0),
+    )
+    await callback.answer()
+
+
+@router.callback_query(IsAdmin(), F.data.startswith("promo_prodpage_"))
+async def promo_product_page(callback: types.CallbackQuery, state: FSMContext):
+    page = int(callback.data.split("_")[-1])
+    data = await state.get_data()
+    months = data.get("free_months") or "?"
+    await callback.message.edit_text(
+        f"Період: <b>{months} міс.</b>\n\nОберіть товар для цього промокоду:",
+        parse_mode="HTML",
+        reply_markup=get_promo_products_keyboard(page),
+    )
+    await callback.answer()
+
+
+@router.callback_query(IsAdmin(), F.data.startswith("promo_pickprod_"))
+async def promo_product_pick(callback: types.CallbackQuery, state: FSMContext):
+    product_id = int(callback.data.split("_")[-1])
+    product = get_product_full(product_id)
+    if not product:
+        await callback.answer("Товар не знайдено", show_alert=True)
+        return
+    await state.update_data(product_id=product_id)
+    name = product.get("product_name") or f"#{product_id}"
+    await callback.message.edit_text(
+        f"Товар: <b>{name}</b>\n\nОберіть термін дії промокоду:",
         parse_mode="HTML",
         reply_markup=get_promo_expiry_keyboard(),
     )
@@ -284,4 +394,6 @@ async def _create_from_state(state: FSMContext, *, code: str | None, created_by:
         expires_at=data.get("expires_at"),
         code=code,
         created_by=created_by,
+        product_id=data.get("product_id"),
+        max_uses=int(data.get("max_uses") if data.get("max_uses") is not None else 1),
     )

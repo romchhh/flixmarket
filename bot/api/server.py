@@ -435,12 +435,10 @@ async def promo_validate(request):
     code = str(body.get("code") or body.get("promoCode") or "").strip()
     if not code:
         return _json({"ok": False, "error": "empty", "message": "Введіть промокод"}, 400)
-    result = validate_promo_code(code)
-    if not result.get("ok"):
-        return _json(result, 400)
 
     months = body.get("months")
     product_id = body.get("product_id") or body.get("productId")
+    user_id = body.get("user_id") or body.get("userId")
     base_amount = body.get("amount")
     try:
         months_i = int(months) if months is not None else None
@@ -450,6 +448,14 @@ async def promo_validate(request):
         product_id_i = int(product_id) if product_id is not None else None
     except (TypeError, ValueError):
         product_id_i = None
+    try:
+        user_id_i = int(user_id) if user_id is not None else None
+    except (TypeError, ValueError):
+        user_id_i = None
+
+    result = validate_promo_code(code, product_id=product_id_i, user_id=user_id_i)
+    if not result.get("ok"):
+        return _json(result, 400)
 
     pricing = None
     promo = result["promo"]

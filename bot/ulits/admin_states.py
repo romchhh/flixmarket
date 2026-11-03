@@ -37,6 +37,7 @@ class LinkStates(StatesGroup):
 
 class PromoStates(StatesGroup):
     waiting_for_percent = State()
+    waiting_for_max_uses = State()
     waiting_for_expiry_date = State()
     waiting_for_custom_code = State()
 

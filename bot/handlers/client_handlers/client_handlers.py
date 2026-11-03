@@ -731,7 +731,7 @@ async def promo_code_entered(message: types.Message, state: FSMContext):
         from database.promo_db import apply_promo_to_price, validate_promo_code
         from ulits.payment_create import create_invoice_for_user
 
-        validated = validate_promo_code(text)
+        validated = validate_promo_code(text, product_id=product_id, user_id=user_id)
         if not validated.get("ok"):
             await message.answer(validated.get("message") or "Невірний промокод. Спробуй ще:")
             return

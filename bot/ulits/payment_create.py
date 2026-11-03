@@ -72,7 +72,14 @@ def resolve_recurring_price(
     return float(paid_amount)
 
 
-def resolve_promo_pricing(*, base_price: float, months: int, promo_code: str | None) -> dict:
+def resolve_promo_pricing(
+    *,
+    base_price: float,
+    months: int,
+    promo_code: str | None,
+    product_id: int | None = None,
+    user_id: int | None = None,
+) -> dict:
     """Повертає amount, months, promo fields після застосування коду."""
     if not promo_code:
         return {
@@ -84,7 +91,11 @@ def resolve_promo_pricing(*, base_price: float, months: int, promo_code: str | N
             "promo": None,
             "is_free": False,
         }
-    validated = validate_promo_code(promo_code)
+    validated = validate_promo_code(
+        promo_code,
+        product_id=product_id,
+        user_id=user_id,
+    )
     if not validated.get("ok"):
         raise ValueError(validated.get("message") or "Невірний промокод")
     promo = validated["promo"]
@@ -191,8 +202,14 @@ def create_invoice_for_user(
 
     # free-промо може дати 6/12 міс., навіть якщо такого тарифу немає в прайсі
     if promo_code:
-        early = validate_promo_code(promo_code)
-        if early.get("ok") and early["promo"].get("type") == "free":
+        early = validate_promo_code(
+            promo_code,
+            product_id=product_id,
+            user_id=user_id,
+        )
+        if not early.get("ok"):
+            raise ValueError(early.get("message") or "Невірний промокод")
+        if early["promo"].get("type") == "free":
             free_m = int(early["promo"].get("freeMonths") or months)
             base_for_free = price_for_months(product, free_m)
             if base_for_free is None and tariffs:
@@ -214,7 +231,13 @@ def create_invoice_for_user(
     if amount is None:
         raise ValueError("Такого строку немає")
 
-    pricing = resolve_promo_pricing(base_price=amount, months=months, promo_code=promo_code)
+    pricing = resolve_promo_pricing(
+        base_price=amount,
+        months=months,
+        promo_code=promo_code,
+        product_id=product_id,
+        user_id=user_id,
+    )
     final_amount = pricing["amount"]
     final_months = pricing["months"]
 
@@ -319,12 +342,26 @@ def record_invoice_for_user(
 
     # якщо сайт передав промокод — валідуємо і тримаємо на платежі до оплати
     if promo_code and not promo_code_id:
-        pricing = resolve_promo_pricing(base_price=amount, months=months, promo_code=promo_code)
+        pricing = resolve_promo_pricing(
+            base_price=amount,
+            months=months,
+            promo_code=promo_code,
+            product_id=product_id,
+            user_id=user_id,
+        )
         # amount уже має бути зі знижкою з сайту; лише привʼязуємо id
         promo_code_id = pricing["promo_code_id"]
         promo_code = pricing["promo_code"]
         if promo_amount_saved is None:
             promo_amount_saved = pricing["promo_amount_saved"]
+    elif promo_code:
+        check = validate_promo_code(
+            promo_code,
+            product_id=product_id,
+            user_id=user_id,
+        )
+        if not check.get("ok"):
+            raise ValueError(check.get("message") or "Невірний промокод")
 
     ok = save_payment_info(
         payment_id=payment_id,
