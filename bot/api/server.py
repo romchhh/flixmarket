@@ -170,6 +170,8 @@ def _sub_payload(user_id: int) -> dict:
     if token_data:
         _, _, masked_card, card_type = token_data
 
+    from database.client_db import get_subscription_issued_access, get_latest_site_delivery_for_user
+
     recurring = []
     for row in get_user_recurring_subscriptions(user_id):
         sub_id, product_name, months, price, next_payment_date, status, payment_failures = row[:7]
@@ -184,7 +186,11 @@ def _sub_payload(user_id: int) -> dict:
             nxt = datetime.now()
         start = nxt - timedelta(days=30 * int(months or 1))
         serialized = serialize_product(product, _public_url()) if product else None
-        recurring.append({
+        access = get_subscription_issued_access(sub_id)
+        if not (isinstance(access, dict) and access.get("delivered")):
+            pid = full.get("product_id") if full else None
+            access = get_latest_site_delivery_for_user(user_id, int(pid) if pid else None)
+        item = {
             "id": f"rec-{sub_id}",
             "botId": sub_id,
             "kind": "recurring",
@@ -204,7 +210,22 @@ def _sub_payload(user_id: int) -> dict:
             "photoUrl": serialized["photoUrl"] if serialized else None,
             "maskedCard": masked_card,
             "cardType": _clean_card_type(card_type),
-        })
+        }
+        if isinstance(access, dict) and access.get("delivered"):
+            if access.get("login"):
+                item["login"] = access.get("login")
+            if access.get("password"):
+                item["password"] = access.get("password")
+            if access.get("profileName"):
+                item["profileName"] = access.get("profileName")
+            if access.get("pin"):
+                item["pin"] = access.get("pin")
+            if access.get("twoFaUrl"):
+                item["twoFaUrl"] = access.get("twoFaUrl")
+                item["hasTotp"] = True
+            elif access.get("hasTotp"):
+                item["hasTotp"] = True
+        recurring.append(item)
     return {"oneTime": one_time, "recurring": recurring}
 
 

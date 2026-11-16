@@ -432,6 +432,7 @@ def format_admin_site_delivery_block(site_delivery: dict | None) -> str:
         password = site_delivery.get("password")
         profile = site_delivery.get("profileName")
         pin = site_delivery.get("pin")
+        two_fa = site_delivery.get("twoFaUrl")
         if login:
             lines.append(f"• Логін: <code>{login}</code>")
         if password:
@@ -440,6 +441,8 @@ def format_admin_site_delivery_block(site_delivery: dict | None) -> str:
             lines.append(f"• Профіль: <b>{profile}</b>")
         if pin:
             lines.append(f"• PIN: <code>{pin}</code>")
+        if two_fa:
+            lines.append(f"• 2FA: {two_fa}")
         return "\n".join(lines)
     return "\n\n⚠️ Автовидача увімкнена, але акаунт зі складу не видано — перевір склад на сайті."
 
